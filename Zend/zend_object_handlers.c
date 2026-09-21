@@ -707,6 +707,7 @@ ZEND_API zval *zend_std_read_property(zend_object *zobj, zend_string *name, int 
 	uintptr_t property_offset;
 	const zend_property_info *prop_info = NULL;
 	uint32_t *guard = NULL;
+	bool release_zobj = false;
 
 #if DEBUG_OBJECT_HANDLERS
 	fprintf(stderr, "Read object #%d property: %s\n", zobj->handle, ZSTR_VAL(name));
@@ -880,7 +881,7 @@ try_again:
 			if (zobj->ce->__get && !((*guard) & IN_GET)) {
 				goto call_getter;
 			}
-			OBJ_RELEASE(zobj);
+			release_zobj = true;
 		} else if (zobj->ce->__get && !((*guard) & IN_GET)) {
 			goto call_getter_addref;
 		}
@@ -929,10 +930,11 @@ uninit_error:
 			zobj = zend_lazy_object_init(zobj);
 			if (!zobj) {
 				retval = &EG(uninitialized_zval);
-				goto exit;
+				goto release_zobj_exit;
 			}
 
-			return zend_std_read_property(zobj, name, type, cache_slot, rv);
+			retval = zend_std_read_property(zobj, name, type, cache_slot, rv);
+			goto release_zobj_exit;
 		}
 	}
 	if (type != BP_VAR_IS) {
@@ -944,6 +946,10 @@ uninit_error:
 	}
 	retval = &EG(uninitialized_zval);
 
+release_zobj_exit:
+	if (release_zobj) {
+		OBJ_RELEASE(zobj);
+	}
 exit:
 	return retval;
 }
