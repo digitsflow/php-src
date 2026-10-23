@@ -43,6 +43,7 @@ jobs:
             --enable-debug \
             --disable-all \
             --enable-cli \
+            --enable-libxml \
             --enable-session \
             --enable-xml \
             --with-curl \
