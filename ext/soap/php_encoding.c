@@ -800,6 +800,7 @@ static zval *to_zval_hexbin(zval *ret, encodeTypePtr type, xmlNodePtr data)
 			} else if (c >= 'A' && c <= 'F') {
 				ZSTR_VAL(str)[i] = (c - 'A' + 10) << 4;
 			} else {
+				zend_string_efree(str);
 				soap_error1(E_ERROR, "Encoding: Invalid value for type '%s'", soap_type_name(type));
 			}
 			c = data->children->content[j++];
@@ -810,6 +811,7 @@ static zval *to_zval_hexbin(zval *ret, encodeTypePtr type, xmlNodePtr data)
 			} else if (c >= 'A' && c <= 'F') {
 				ZSTR_VAL(str)[i] |= c - 'A' + 10;
 			} else {
+				zend_string_efree(str);
 				soap_error1(E_ERROR, "Encoding: Invalid value for type '%s'", soap_type_name(type));
 			}
 		}
@@ -984,6 +986,12 @@ static xmlNodePtr to_xml_hexbin(encodeTypePtr type, zval *data, int style, xmlNo
 		ZVAL_STR(&tmp, get_serialization_string_from_zval(data));
 		data = &tmp;
 	}
+	if (UNEXPECTED(Z_STRLEN_P(data) > INT_MAX / 2)) {
+		if (data == &tmp) {
+			zval_ptr_dtor_str(&tmp);
+		}
+		soap_error0(E_ERROR, "Encoding: string is too long to encode as hexBinary");
+	}
 	str = (unsigned char *) safe_emalloc(Z_STRLEN_P(data), 2, 1);
 
 	for (i = j = 0; i < Z_STRLEN_P(data); i++) {
@@ -992,7 +1000,7 @@ static xmlNodePtr to_xml_hexbin(encodeTypePtr type, zval *data, int style, xmlNo
 	}
 	str[j] = '\0';
 
-	text = xmlNewTextLen(str, Z_STRLEN_P(data) * 2 * sizeof(char));
+	text = xmlNewTextLen(str, (int)(Z_STRLEN_P(data) * 2));
 	xmlAddChild(ret, text);
 	efree(str);
 	if (data == &tmp) {
