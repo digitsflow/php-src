@@ -49,6 +49,8 @@ jobs:
             --with-curl \
             --with-zip \
             --with-gettext \
+            --enable-exif \
+            --enable-soap \
             --with-openssl \
             --with-zlib
 
