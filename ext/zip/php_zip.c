@@ -247,7 +247,22 @@ static int php_zip_extract_file(struct zip * za, char *dest, char *file, size_t 
 	n = 0;
 
 	while ((n=zip_fread(zf, b, sizeof(b))) > 0) {
-		php_stream_write(stream, b, n);
+		if (php_stream_write(stream, b, n) != n) {
+			n = -1;
+			break;
+		}
+	}
+
+	if (n < 0) {
+		const char *message;
+
+		if (php_zip_file_error(zf, &message) != ZIP_ER_OK) {
+			php_error_docref(NULL, E_WARNING, "Cannot extract \"%s\": \"%s\"", file, message);
+		}
+		php_stream_close(stream);
+		zip_fclose(zf);
+		VCWD_UNLINK(fullpath);
+		goto done;
 	}
 
 	if (stream->wrapper->wops->stream_metadata) {
@@ -258,7 +273,10 @@ static int php_zip_extract_file(struct zip * za, char *dest, char *file, size_t 
 	}
 
 	php_stream_close(stream);
-	n = zip_fclose(zf);
+	n = zip_fclose(zf) == 0 ? 0 : -1;
+	if (n < 0) {
+		VCWD_UNLINK(fullpath);
+	}
 
 done:
 	efree(fullpath);
