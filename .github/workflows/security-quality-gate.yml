@@ -1,0 +1,76 @@
+name: Security & Sanitizer Quality Gate (ASAN / UBSAN)
+
+on:
+  pull_request:
+    paths:
+      - 'Zend/**'
+      - 'ext/**'
+      - 'main/**'
+      - 'sapi/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  asan-verification:
+    name: AddressSanitizer & UndefinedBehaviorSanitizer Gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make autoconf bison re2c pkg-config \
+            libxml2-dev libssl-dev libsqlite3-dev zlib1g-dev libcurl4-openssl-dev \
+            libonig-dev libzip-dev libsystemd-dev libicu-dev
+
+      - name: Regenerate Build System
+        run: ./buildconf --force
+
+      - name: Configure with ASAN & UBSAN
+        env:
+          CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -g -O1 -DZEND_TRACK_ARENA_ALLOC"
+          LDFLAGS: "-fsanitize=address,undefined"
+        run: |
+          ./configure \
+            --enable-debug \
+            --disable-all \
+            --enable-cli \
+            --enable-session \
+            --enable-xml \
+            --with-curl \
+            --with-zip \
+            --with-gettext \
+            --with-openssl \
+            --with-zlib
+
+      - name: Compile Sanitized PHP Binary
+        run: make -j$(nproc)
+
+      - name: Execute Security & Regression Tests under ASAN
+        env:
+          ASAN_OPTIONS: "detect_leaks=1:abort_on_error=1:allocator_may_return_null=1"
+          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+        run: |
+          # Automatically detect changed .phpt test files in the pull request
+          CHANGED_TESTS=$(git diff --name-only HEAD~1 HEAD | grep '\.phpt$' || true)
+          
+          if [ -n "$CHANGED_TESTS" ]; then
+            echo "Running PR regression test suite under ASAN:"
+            echo "$CHANGED_TESTS"
+            sapi/cli/php run-tests.php -P -q --show-diff $CHANGED_TESTS
+          else
+            echo "Running core security test suite under ASAN:"
+            sapi/cli/php run-tests.php -P -q --show-diff \
+              ext/curl/tests/ \
+              ext/xml/tests/ \
+              ext/zip/tests/ \
+              ext/session/tests/
+          fi
