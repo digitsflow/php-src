@@ -2860,7 +2860,7 @@ static void php_zip_get_from(INTERNAL_FUNCTION_PARAMETERS, int type) /* {{{ */
 	zend_string *filename;
 	zend_string *buffer;
 
-	int n = 0;
+	zip_int64_t n = 0;
 
 	if (type == 1) {
 		if (zend_parse_parameters(ZEND_NUM_ARGS(), "P|ll", &filename, &len, &flags) == FAILURE) {
@@ -2895,7 +2895,6 @@ static void php_zip_get_from(INTERNAL_FUNCTION_PARAMETERS, int type) /* {{{ */
 
 	buffer = zend_string_safe_alloc(1, len, 0, 0);
 	/* zip_fread() may return short reads, a truncated entry must not pass for a complete one. */
-	zip_int64_t n = 0;
 	while ((zip_uint64_t)n < ZSTR_LEN(buffer)) {
 		zip_int64_t rd = zip_fread(zf, ZSTR_VAL(buffer) + n, ZSTR_LEN(buffer) - n);
 
