@@ -41,7 +41,6 @@ RUN ./buildconf --force && \
       --disable-short-tags \
       --enable-cli \
       --enable-mbstring \
-      --enable-opcache \
       --enable-session \
       --enable-pdo \
       --with-pdo-mysql=mysqlnd \
