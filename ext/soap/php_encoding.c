@@ -800,7 +800,12 @@ static zval *to_zval_hexbin(zval *ret, encodeTypePtr type, xmlNodePtr data)
 			soap_error0(E_ERROR, "Encoding: Violation of encoding rules");
 			return ret;
 		}
-		str = zend_string_alloc(strlen((char*)data->children->content) / 2, 0);
+		size_t content_len = strlen((char*)data->children->content);
+		if (content_len % 2 != 0) {
+			soap_error0(E_ERROR, "Encoding: Violation of encoding rules");
+			return ret;
+		}
+		str = zend_string_alloc(content_len / 2, 0);
 		for (i = j = 0; i < ZSTR_LEN(str); i++) {
 			c = data->children->content[j++];
 			if (c >= '0' && c <= '9') {
@@ -810,6 +815,7 @@ static zval *to_zval_hexbin(zval *ret, encodeTypePtr type, xmlNodePtr data)
 			} else if (c >= 'A' && c <= 'F') {
 				ZSTR_VAL(str)[i] = (c - 'A' + 10) << 4;
 			} else {
+				zend_string_efree(str);
 				soap_error0(E_ERROR, "Encoding: Violation of encoding rules");
 			}
 			c = data->children->content[j++];
@@ -820,6 +826,7 @@ static zval *to_zval_hexbin(zval *ret, encodeTypePtr type, xmlNodePtr data)
 			} else if (c >= 'A' && c <= 'F') {
 				ZSTR_VAL(str)[i] |= c - 'A' + 10;
 			} else {
+				zend_string_efree(str);
 				soap_error0(E_ERROR, "Encoding: Violation of encoding rules");
 			}
 		}
@@ -968,7 +975,12 @@ static xmlNodePtr to_xml_base64(encodeTypePtr type, zval *data, int style, xmlNo
 	zend_string *str = php_base64_encode((unsigned char *) ZSTR_VAL(serialization), ZSTR_LEN(serialization));
 	zend_string_release(serialization);
 
-	text = xmlNewTextLen(BAD_CAST(ZSTR_VAL(str)), ZSTR_LEN(str));
+	if (UNEXPECTED(ZSTR_LEN(str) > INT_MAX)) {
+		zend_string_release_ex(str, 0);
+		soap_error0(E_ERROR, "Encoding: string is too long to encode as base64Binary");
+	}
+
+	text = xmlNewTextLen(BAD_CAST(ZSTR_VAL(str)), (int)ZSTR_LEN(str));
 	xmlAddChild(ret, text);
 	zend_string_release_ex(str, 0);
 
@@ -994,7 +1006,13 @@ static xmlNodePtr to_xml_hexbin(encodeTypePtr type, zval *data, int style, xmlNo
 		ZVAL_STR(&tmp, get_serialization_string_from_zval(data));
 		data = &tmp;
 	}
-	str = (unsigned char *) safe_emalloc(Z_STRLEN_P(data) * 2, sizeof(char), 1);
+	if (UNEXPECTED(Z_STRLEN_P(data) > INT_MAX / 2)) {
+		if (data == &tmp) {
+			zval_ptr_dtor_str(&tmp);
+		}
+		soap_error0(E_ERROR, "Encoding: string is too long to encode as hexBinary");
+	}
+	str = (unsigned char *) safe_emalloc(Z_STRLEN_P(data), 2, 1);
 
 	for (i = j = 0; i < Z_STRLEN_P(data); i++) {
 		str[j++] = hexconvtab[((unsigned char)Z_STRVAL_P(data)[i]) >> 4];
@@ -1002,7 +1020,7 @@ static xmlNodePtr to_xml_hexbin(encodeTypePtr type, zval *data, int style, xmlNo
 	}
 	str[j] = '\0';
 
-	text = xmlNewTextLen(str, Z_STRLEN_P(data) * 2 * sizeof(char));
+	text = xmlNewTextLen(str, (int)(Z_STRLEN_P(data) * 2));
 	xmlAddChild(ret, text);
 	efree(str);
 	if (data == &tmp) {
