@@ -30,7 +30,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential autoconf bison re2c pkg-config \
             libxml2-dev libssl-dev libzip-dev libpq-dev \
-            libcurl4-openssl-dev libonig-dev libsqlite3-dev zlib1g-dev
+            libcurl4-openssl-dev libonig-dev libsqlite3-dev zlib1g-dev \
+            libsystemd-dev libicu-dev
 
       - name: Build & Stage Digitsflow PHP
         run: |
