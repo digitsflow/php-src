@@ -36,6 +36,21 @@ if [ ! -f ./configure ]; then
   ./buildconf --force
 fi
 
+# Detect optional library support via pkg-config
+EXTRA_CONFIG_FLAGS=()
+
+if pkg-config --exists libsystemd; then
+  echo "Found libsystemd: Enabling systemd integration in PHP-FPM"
+  EXTRA_CONFIG_FLAGS+=( "--with-fpm-systemd" )
+else
+  echo "libsystemd not found: Building PHP-FPM without systemd notify"
+fi
+
+if pkg-config --exists icu-uc; then
+  echo "Found libicu: Enabling intl extension"
+  EXTRA_CONFIG_FLAGS+=( "--enable-intl" )
+fi
+
 # 2. Configure build with full isolation flags
 echo "[2/4] Running configure..."
 ./configure \
@@ -47,11 +62,9 @@ echo "[2/4] Running configure..."
   --enable-fpm \
   --with-fpm-user=www-data \
   --with-fpm-group=www-data \
-  --with-fpm-systemd \
   --disable-short-tags \
   --enable-cli \
   --enable-mbstring \
-  --enable-opcache \
   --enable-session \
   --enable-pdo \
   --with-pdo-mysql=mysqlnd \
@@ -66,8 +79,8 @@ echo "[2/4] Running configure..."
   --enable-bcmath \
   --enable-pcntl \
   --enable-sockets \
-  --enable-intl \
-  --with-pear=no
+  --with-pear=no \
+  "${EXTRA_CONFIG_FLAGS[@]}"
 
 # 3. Compile
 echo "[3/4] Compiling PHP with ${NPROC} workers..."
