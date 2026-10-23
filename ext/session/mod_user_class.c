@@ -167,6 +167,10 @@ PHP_METHOD(SessionHandler, create_sid)
 	PS_SANITY_CHECK;
 
 	id = PS(default_mod)->s_create_sid(&PS(mod_data));
+	if (UNEXPECTED(id == NULL)) {
+		zend_throw_error(NULL, "Failed to create session ID: %s (path: %s)", PS(mod)->s_name, ZSTR_VAL(PS(save_path)));
+		RETURN_THROWS();
+	}
 
 	RETURN_STR(id);
 }
