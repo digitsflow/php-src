@@ -3,12 +3,18 @@ name: Build & Release Digitsflow PHP
 on:
   push:
     branches:
+      - digitsflow-8.1
+      - digitsflow-8.2
+      - digitsflow-8.3
       - digitsflow-8.4
       - master
     tags:
       - 'v*'
   pull_request:
     branches:
+      - digitsflow-8.1
+      - digitsflow-8.2
+      - digitsflow-8.3
       - digitsflow-8.4
   workflow_dispatch:
 
