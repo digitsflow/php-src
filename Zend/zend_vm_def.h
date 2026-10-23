@@ -8425,14 +8425,6 @@ ZEND_VM_HANDLER(142, ZEND_DECLARE_LAMBDA_FUNCTION, UNUSED, NUM, NUM|CACHE_SLOT)
 	zend_object *object;
 	zend_class_entry *called_scope;
 
-	if (opline->extended_value != (uint32_t)-1) {
-		zend_object *closure = CACHED_PTR(opline->extended_value);
-		if (closure) {
-			ZVAL_OBJ_COPY(EX_VAR(opline->result.var), closure);
-			ZEND_VM_NEXT_OPCODE();
-		}
-	}
-
 	func = (zend_function *) EX(func)->op_array.dynamic_func_defs[opline->op2.num];
 	if (Z_TYPE(EX(This)) == IS_OBJECT) {
 		called_scope = Z_OBJCE(EX(This));
@@ -8446,10 +8438,19 @@ ZEND_VM_HANDLER(142, ZEND_DECLARE_LAMBDA_FUNCTION, UNUSED, NUM, NUM|CACHE_SLOT)
 		called_scope = Z_CE(EX(This));
 		object = NULL;
 	}
+
+	if (opline->extended_value != (uint32_t)-1 && called_scope == EX(func)->op_array.scope) {
+		zend_object *closure = CACHED_PTR(opline->extended_value);
+		if (closure) {
+			ZVAL_OBJ_COPY(EX_VAR(opline->result.var), closure);
+			ZEND_VM_NEXT_OPCODE();
+		}
+	}
+
 	SAVE_OPLINE();
 	zend_create_closure(EX_VAR(opline->result.var), func,
 		EX(func)->op_array.scope, called_scope, object);
-	if (opline->extended_value != (uint32_t)-1) {
+	if (opline->extended_value != (uint32_t)-1 && called_scope == EX(func)->op_array.scope) {
 		zend_object *closure = Z_OBJ_P(EX_VAR(opline->result.var));
 		GC_ADDREF(closure);
 		CACHE_PTR(opline->extended_value, closure);
