@@ -1,0 +1,18 @@
+[Unit]
+Description=The Digitsflow PHP FastCGI Process Manager
+Documentation=man:php-fpm-digitsflow(8)
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=/opt/digitsflow/php/sbin/php-fpm-digitsflow --nodaemonize --fpm-config /etc/digitsflow/php/php-fpm.conf
+ExecReload=/bin/kill -USR2 $MAINPID
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+RuntimeDirectory=digitsflow
+RuntimeDirectoryMode=0755
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
