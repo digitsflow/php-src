@@ -1,0 +1,103 @@
+# ==============================================================================
+# Multi-Stage Dockerfile for Digitsflow Custom PHP Build
+# ==============================================================================
+
+# Stage 1: Build PHP
+FROM ubuntu:24.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    autoconf \
+    bison \
+    re2c \
+    pkg-config \
+    ca-certificates \
+    git \
+    libxml2-dev \
+    libssl-dev \
+    libzip-dev \
+    libpq-dev \
+    libcurl4-openssl-dev \
+    libonig-dev \
+    libsqlite3-dev \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src/php
+COPY . .
+
+RUN ./buildconf --force && \
+    ./configure \
+      --prefix=/opt/digitsflow/php \
+      --program-suffix="-digitsflow" \
+      --with-config-file-path=/etc/digitsflow/php \
+      --with-config-file-scan-dir=/etc/digitsflow/php/conf.d \
+      PHP_EXTRA_VERSION="-digitsflow" \
+      --enable-fpm \
+      --with-fpm-user=www-data \
+      --with-fpm-group=www-data \
+      --disable-short-tags \
+      --enable-cli \
+      --enable-mbstring \
+      --enable-opcache \
+      --enable-session \
+      --enable-pdo \
+      --with-pdo-mysql=mysqlnd \
+      --with-pdo-pgsql \
+      --with-openssl \
+      --with-zlib \
+      --with-zip \
+      --with-curl \
+      --with-libxml \
+      --enable-dom \
+      --enable-xml \
+      --enable-bcmath \
+      --enable-pcntl \
+      --enable-sockets \
+      --with-pear=no && \
+    make -j"$(nproc)" && \
+    make install INSTALL_ROOT=/tmp/pkg-root
+
+# Prepare default production configs inside staging
+RUN mkdir -p /tmp/pkg-root/etc/digitsflow/php/conf.d /tmp/pkg-root/run/digitsflow && \
+    cp php.ini-production /tmp/pkg-root/etc/digitsflow/php/php.ini && \
+    if [ -f packaging/fpm/php-fpm.conf ]; then \
+        cp packaging/fpm/php-fpm.conf /tmp/pkg-root/etc/digitsflow/php/php-fpm.conf && \
+        mkdir -p /tmp/pkg-root/etc/digitsflow/php/php-fpm.d && \
+        cp packaging/fpm/digitsflow-pool.conf /tmp/pkg-root/etc/digitsflow/php/php-fpm.d/www.conf; \
+    fi
+
+# Stage 2: Minimal Production Runtime
+FROM ubuntu:24.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH="/opt/digitsflow/php/bin:/opt/digitsflow/php/sbin:${PATH}"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libxml2 \
+    libssl3 \
+    libzip4 \
+    libpq5 \
+    libcurl4 \
+    libonig5 \
+    libsqlite3-0 \
+    zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed binaries and config from builder
+COPY --from=builder /tmp/pkg-root/opt/digitsflow/php /opt/digitsflow/php
+COPY --from=builder /tmp/pkg-root/etc/digitsflow/php /etc/digitsflow/php
+
+# Create symlinks in /usr/local/bin for convenience
+RUN ln -s /opt/digitsflow/php/bin/php-digitsflow /usr/local/bin/php && \
+    ln -s /opt/digitsflow/php/sbin/php-fpm-digitsflow /usr/local/bin/php-fpm && \
+    mkdir -p /run/digitsflow && chown www-data:www-data /run/digitsflow
+
+WORKDIR /var/www/html
+
+EXPOSE 9000
+
+CMD ["php-fpm-digitsflow", "--nodaemonize", "--fpm-config", "/etc/digitsflow/php/php-fpm.conf"]
