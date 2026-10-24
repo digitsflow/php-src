@@ -55,6 +55,8 @@ jobs:
             --enable-simplexml \
             --enable-dom \
             --enable-opcache \
+            --enable-ftp \
+            --enable-pcntl \
             --with-openssl \
             --with-zlib
 
