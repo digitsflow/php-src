@@ -852,7 +852,7 @@ set_flags:
 #define INT_SIZE	0x2
 #define WORD_SIZE	0x3
 
-#define MEM_SIZE_SHIFT(flags) ((flags) & 0x3)
+#define MEM_SIZE_SHIFT(flags) ((sljit_ins)(flags) & 0x3)
 
 static sljit_s32 emit_op_mem(struct sljit_compiler *compiler, sljit_s32 flags, sljit_s32 reg,
 	sljit_s32 arg, sljit_sw argw, sljit_s32 tmp_reg)
