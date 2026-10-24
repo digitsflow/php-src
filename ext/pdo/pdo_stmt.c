@@ -753,7 +753,12 @@ static bool do_fetch(pdo_stmt_t *stmt, zval *return_value, enum pdo_fetch_type h
 		case PDO_FETCH_NUM:
 		case PDO_FETCH_NAMED:
 			if (!group_key) {
-				array_init_size(return_value, stmt->column_count);
+				/* PDO::FETCH_BOTH stores every value under its name and its index */
+				uint32_t num_elements = stmt->column_count > 0 ? (uint32_t)stmt->column_count : 0;
+				if (how == PDO_FETCH_BOTH && num_elements <= HT_MAX_SIZE / 2) {
+					num_elements *= 2;
+				}
+				array_init_size(return_value, num_elements);
 			} else {
 				array_init(return_value);
 			}
