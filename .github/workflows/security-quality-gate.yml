@@ -73,6 +73,7 @@ jobs:
             --enable-pdo \
             --with-pdo-sqlite \
             --with-ffi \
+            --with-mhash \
             --with-openssl \
             --with-zlib
 
