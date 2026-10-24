@@ -1,11 +1,12 @@
 name: Security & Sanitizer Quality Gate (ASAN / UBSAN)
 
 on:
-  push:
+  pull_request:
     branches:
       - 'digitsflow-*'
       - master
-  pull_request:
+      - 'PHP-*'
+  push:
     branches:
       - 'digitsflow-*'
       - master
@@ -14,12 +15,22 @@ on:
 permissions:
   contents: read
 
-jobs:
-  asan-verification:
-    name: AddressSanitizer & UndefinedBehaviorSanitizer Gate
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.url || github.run_id }}
+  cancel-in-progress: true
 
+jobs:
+  asan-ubsan-gate:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    name: AddressSanitizer & UndefinedBehaviorSanitizer Gate (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -36,11 +47,11 @@ jobs:
       - name: Configure Compiler Cache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: "security-gate-asan-x86_64"
+          key: "asan-ubsan-gate-${{ matrix.arch }}-${{ github.ref_name }}"
           append-timestamp: false
           save: true
 
-      - name: Regenerate Build System
+      - name: Generate Configure Script
         run: ./buildconf --force
 
       - name: Configure with ASAN & UBSAN
@@ -54,18 +65,18 @@ jobs:
             --enable-debug \
             --disable-all \
             --enable-cli \
-            --with-libxml \
+            --enable-fpm \
+            --enable-opcache \
             --enable-session \
             --enable-xml \
-            --with-curl \
-            --with-zip \
-            --with-gettext \
-            --enable-exif \
-            --enable-soap \
-            --enable-mbstring \
             --enable-simplexml \
             --enable-dom \
-            --enable-opcache \
+            --with-libxml \
+            --enable-mbstring \
+            --with-curl \
+            --with-zip \
+            --enable-exif \
+            --enable-soap \
             --enable-ftp \
             --enable-pcntl \
             --enable-posix \
@@ -78,10 +89,10 @@ jobs:
             --with-openssl \
             --with-zlib
 
-      - name: Compile Sanitized PHP Binary
+      - name: Compile PHP
         run: make -j$(nproc)
 
-      - name: Execute Security & Regression Tests under ASAN
+      - name: Execute Security & Regression Tests under ASAN (${{ matrix.arch }})
         env:
           ASAN_OPTIONS: "detect_leaks=1:abort_on_error=1:allocator_may_return_null=1"
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
@@ -100,6 +111,7 @@ jobs:
               ext/ffi/tests/finalize_type_bailout_leak.phpt \
               ext/ffi/tests/spprintf_ps_null_and_zeropad.phpt \
               ext/hash/tests/gh23950.phpt \
+              ext/opcache/tests/jit/aarch64_ir_patch_and_veneer_safety.phpt \
               ext/pdo/tests/pdo_fetch_both_column_count_overflow.phpt \
               ext/session/tests/gh24376_session_cloexec.phpt \
               ext/session/tests/mod_user_create_sid_null.phpt \
@@ -118,7 +130,7 @@ jobs:
               fi
             done
             if [ -n "$TESTS" ]; then
-              echo "Running Digitsflow Security & Sanitizer Regression Suite under ASAN:"
+              echo "Running Digitsflow Security & Sanitizer Regression Suite under ASAN (${{ matrix.arch }}):"
               echo "$TESTS"
               sapi/cli/php run-tests.php -P -q --show-diff -d extension_dir=$PWD/modules $TESTS
             fi
