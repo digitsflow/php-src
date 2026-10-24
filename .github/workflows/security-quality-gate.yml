@@ -58,6 +58,7 @@ jobs:
             --enable-ftp \
             --enable-pcntl \
             --enable-posix \
+            --enable-sockets \
             --with-openssl \
             --with-zlib
 
