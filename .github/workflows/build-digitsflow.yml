@@ -55,7 +55,8 @@ jobs:
 
       - name: Create Distribution Tarball
         run: |
-          PKG_NAME="php-digitsflow-${{ github.ref_name }}-linux-x86_64.tar.gz"
+          REF_CLEAN=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          PKG_NAME="php-digitsflow-${REF_CLEAN}-linux-x86_64.tar.gz"
           tar -czvf "$PKG_NAME" -C /tmp/digitsflow-pkg .
           echo "PKG_NAME=$PKG_NAME" >> "$GITHUB_ENV"
 
