@@ -51,7 +51,8 @@ jobs:
             ext/zip/tests/gh23240_cleanup.phpt \
             ext/session/tests/mod_user_create_sid_null.phpt \
             ext/standard/tests/strings/gh23204_frameless.phpt \
-            ext/xsl/tests/gh23199_destruct.phpt
+            ext/xsl/tests/gh23199_destruct.phpt \
+            ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt
 
       - name: Create Distribution Tarball
         run: |
