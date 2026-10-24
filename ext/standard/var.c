@@ -737,7 +737,10 @@ static inline zend_long php_add_var_hash(php_serialize_data_t data, zval *var, b
 		return 0;
 	} else if (!in_rcn_array
 	 && Z_REFCOUNT_P(var) == 1
-	 && (Z_OBJ_P(var)->properties == NULL || GC_REFCOUNT(Z_OBJ_P(var)->properties) == 1)) {
+	 && (Z_OBJ_P(var)->properties == NULL || GC_REFCOUNT(Z_OBJ_P(var)->properties) == 1)
+	 /* __serialize and __sleep may arbitrarily increase the refcount */
+	 && Z_OBJCE_P(var)->__serialize == NULL
+	 && zend_hash_find_known_hash(&Z_OBJCE_P(var)->function_table, ZSTR_KNOWN(ZEND_STR_SLEEP)) == NULL) {
 		return 0;
 	}
 
@@ -1343,12 +1346,13 @@ PHPAPI php_serialize_data_t php_var_serialize_init(void) {
 
 PHPAPI void php_var_serialize_destroy(php_serialize_data_t d) {
 	/* fprintf(stderr, "SERIALIZE_DESTROY   == lock: %u, level: %u\n", BG(serialize_lock), BG(serialize).level); */
-	if (BG(serialize_lock) || BG(serialize).level == 1) {
+	if (BG(serialize_lock)) {
 		zend_hash_destroy(&d->ht);
 		efree(d);
-	}
-	if (!BG(serialize_lock) && !--BG(serialize).level) {
+	} else if (!--BG(serialize).level) {
 		BG(serialize).data = NULL;
+		zend_hash_destroy(&d->ht);
+		efree(d);
 	}
 }
 
