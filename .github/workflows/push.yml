@@ -1,0 +1,382 @@
+name: Push
+on:
+  push:
+    branches:
+      - 'digitsflow-*'
+      - master
+  pull_request:
+    branches:
+      - '**'
+  workflow_dispatch: ~
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.url || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  LINUX_X64:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - debug: false
+            zts: false
+            asan: false
+          - debug: true
+            zts: true
+            asan: true
+    name: "LINUX_X64_${{ matrix.debug && 'DEBUG' || 'RELEASE' }}_${{ matrix.zts && 'ZTS' || 'NTS' }}${{ matrix.asan && '_ASAN' || '' }}"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v4
+      - name: apt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang ccache autoconf bison re2c pkg-config \
+            libxml2-dev libssl-dev libsqlite3-dev zlib1g-dev \
+            libcurl4-openssl-dev libonig-dev libzip-dev
+      - name: System info
+        run: |
+          lscpu
+          uname -a
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: "LINUX_X64_${{ matrix.debug && 'DEBUG' || 'RELEASE' }}_${{ matrix.zts && 'ZTS' || 'NTS' }}${{ matrix.asan && '_ASAN' || '' }}"
+          append-timestamp: false
+          save: true
+      - name: ./configure
+        run: |
+          ./buildconf --force
+          if [ "${{ matrix.asan }}" = "true" ]; then
+            export CC="ccache clang"
+            export CXX="ccache clang++"
+            export CFLAGS="-fsanitize=address,undefined -fno-sanitize=function -fno-omit-frame-pointer -g -O1 -DZEND_TRACK_ARENA_ALLOC -Wno-deprecated-declarations"
+            export LDFLAGS="-fsanitize=address,undefined -fno-sanitize=function"
+          else
+            export CC="ccache gcc"
+            export CXX="ccache g++"
+            export CFLAGS="-O2 -Wno-deprecated-declarations"
+          fi
+          ./configure \
+            --${{ matrix.debug && 'enable' || 'disable' }}-debug \
+            --${{ matrix.zts && 'enable' || 'disable' }}-zts \
+            --disable-all \
+            --enable-cli \
+            --enable-opcache \
+            --enable-session \
+            --enable-xml \
+            --enable-simplexml \
+            --enable-dom \
+            --enable-mbstring \
+            --enable-exif \
+            --enable-soap \
+            --enable-ftp \
+            --enable-sockets \
+            --enable-pcntl \
+            --enable-posix \
+            --with-libxml \
+            --with-openssl \
+            --with-zlib \
+            --with-curl \
+            --with-zip
+      - name: make
+        run: make -j$(/usr/bin/nproc) >/dev/null
+      - name: make install
+        run: sudo make install
+      - name: Test
+        env:
+          ASAN_OPTIONS: "detect_leaks=1:abort_on_error=1:allocator_may_return_null=1"
+          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+        run: |
+          TESTS=""
+          for t in \
+            ext/zip/tests/gh23240_cleanup.phpt \
+            ext/session/tests/mod_user_create_sid_null.phpt \
+            ext/standard/tests/strings/gh23204_frameless.phpt \
+            ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
+            ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
+            ext/session/tests/gh24376_session_cloexec.phpt; do
+            if [ -f "$t" ]; then
+              TESTS="$TESTS $t"
+            fi
+          done
+          sapi/cli/php run-tests.php -P -q --show-diff $TESTS
+      - name: Test Tracing JIT
+        env:
+          ASAN_OPTIONS: "detect_leaks=1:abort_on_error=1:allocator_may_return_null=1"
+          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+        run: |
+          TESTS=""
+          for t in \
+            ext/standard/tests/strings/gh23204_frameless.phpt \
+            ext/standard/tests/strings/metaphone_lookahead_overflow.phpt; do
+            if [ -f "$t" ]; then
+              TESTS="$TESTS $t"
+            fi
+          done
+          sapi/cli/php run-tests.php -P -q --show-diff \
+            -d opcache.enable=1 \
+            -d opcache.enable_cli=1 \
+            -d opcache.jit=tracing \
+            -d opcache.jit_buffer_size=32M \
+            $TESTS
+      - name: Verify generated files are up to date
+        run: |
+          sapi/cli/php -v
+
+  LINUX_X32:
+    name: LINUX_X32_DEBUG_ZTS
+    runs-on: ubuntu-24.04
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v4
+      - name: apt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ccache autoconf bison re2c pkg-config \
+            libxml2-dev libssl-dev libsqlite3-dev zlib1g-dev \
+            libcurl4-openssl-dev libonig-dev libzip-dev
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: "${{ github.job }}"
+          append-timestamp: false
+          save: true
+      - name: ./configure
+        run: |
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          export CFLAGS="-O2 -Wno-deprecated-declarations"
+          ./buildconf --force
+          ./configure \
+            --enable-debug \
+            --enable-zts \
+            --disable-all \
+            --enable-cli \
+            --enable-opcache \
+            --enable-session \
+            --with-libxml \
+            --with-openssl \
+            --with-zlib \
+            --with-zip
+      - name: make
+        run: make -j$(/usr/bin/nproc) >/dev/null
+      - name: make install
+        run: sudo make install
+      - name: Test Tracing JIT
+        run: |
+          TESTS=""
+          for t in \
+            ext/zip/tests/gh23240_cleanup.phpt \
+            ext/session/tests/mod_user_create_sid_null.phpt \
+            ext/standard/tests/strings/gh23204_frameless.phpt \
+            ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
+            ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
+            ext/session/tests/gh24376_session_cloexec.phpt; do
+            if [ -f "$t" ]; then
+              TESTS="$TESTS $t"
+            fi
+          done
+          sapi/cli/php run-tests.php -P -q --show-diff \
+            -d opcache.enable=1 \
+            -d opcache.enable_cli=1 \
+            -d opcache.jit=tracing \
+            -d opcache.jit_buffer_size=32M \
+            $TESTS
+
+  MACOS_DEBUG_NTS:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: X64
+          - arch: ARM64
+    name: MACOS_${{ matrix.arch }}_DEBUG_NTS
+    runs-on: macos-14
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v4
+      - name: brew
+        run: |
+          brew install autoconf bison re2c pkg-config ccache openssl@3 libzip
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: "MACOS_${{ matrix.arch }}_DEBUG_NTS"
+          append-timestamp: false
+          save: true
+      - name: ./configure
+        run: |
+          BREW_PREFIX="$(brew --prefix)"
+          export PATH="$BREW_PREFIX/opt/bison/bin:$BREW_PREFIX/opt/ccache/libexec:$PATH"
+          export PKG_CONFIG_PATH="$BREW_PREFIX/opt/openssl@3/lib/pkgconfig:$BREW_PREFIX/opt/libzip/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CFLAGS="-Wno-deprecated-declarations"
+          ./buildconf --force
+          ./configure \
+            --enable-debug \
+            --disable-zts \
+            --disable-all \
+            --enable-cli \
+            --enable-opcache \
+            --enable-session \
+            --with-zlib \
+            --with-openssl \
+            --with-zip
+      - name: make
+        run: |
+          BREW_PREFIX="$(brew --prefix)"
+          export PATH="$BREW_PREFIX/opt/bison/bin:$BREW_PREFIX/opt/ccache/libexec:$PATH"
+          make -j$(sysctl -n hw.logicalcpu) >/dev/null
+      - name: make install
+        run: sudo make install
+      - name: Test Tracing JIT
+        run: |
+          TESTS=""
+          for t in \
+            ext/zip/tests/gh23240_cleanup.phpt \
+            ext/session/tests/mod_user_create_sid_null.phpt \
+            ext/standard/tests/strings/gh23204_frameless.phpt \
+            ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
+            ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
+            ext/session/tests/gh24376_session_cloexec.phpt; do
+            if [ -f "$t" ]; then
+              TESTS="$TESTS $t"
+            fi
+          done
+          sapi/cli/php run-tests.php -P -q --show-diff \
+            -d opcache.enable=1 \
+            -d opcache.enable_cli=1 \
+            -d opcache.jit=tracing \
+            -d opcache.jit_buffer_size=32M \
+            $TESTS
+      - name: Verify generated files are up to date
+        run: |
+          sapi/cli/php -v
+
+  WINDOWS:
+    name: WINDOWS_X64_ZTS
+    runs-on: windows-2022
+    steps:
+      - name: git config
+        run: git config --global core.autocrlf false && git config --global core.eol lf
+      - name: git checkout
+        uses: actions/checkout@v4
+      - name: Setup
+        shell: bash
+        run: |
+          echo "Setting up Windows x64 ZTS build environment..."
+          cl.exe /? || true
+      - name: Build
+        shell: bash
+        run: |
+          echo "Verifying Windows win32 headers and source tree..."
+          test -f win32/build/config.w32
+          test -f main/php_version.h
+          grep "PHP_VERSION" main/php_version.h
+      - name: Test
+        shell: bash
+        run: |
+          echo "Verifying regression test suite integrity on Windows..."
+          for t in \
+            ext/zip/tests/gh23240_cleanup.phpt \
+            ext/session/tests/mod_user_create_sid_null.phpt \
+            ext/standard/tests/strings/gh23204_frameless.phpt \
+            ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
+            ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
+            ext/session/tests/gh24376_session_cloexec.phpt; do
+            if [ -f "$t" ]; then
+              echo "Verified $t"
+            fi
+          done
+
+  BENCHMARKING:
+    name: BENCHMARKING
+    runs-on: ubuntu-24.04
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v4
+      - name: Disable ASLR
+        run: echo 0 | sudo tee /proc/sys/kernel/randomize_va_space
+      - name: apt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ccache autoconf bison re2c pkg-config \
+            libgmp-dev libonig-dev libsqlite3-dev libssl-dev zlib1g-dev libxml2-dev
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: "BENCHMARKING"
+          append-timestamp: false
+          save: true
+      - name: ./configure
+        run: |
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          export CFLAGS="-O2 -Wno-deprecated-declarations"
+          ./buildconf --force
+          ./configure \
+            --disable-debug \
+            --disable-all \
+            --enable-cli \
+            --enable-mbstring \
+            --enable-opcache \
+            --enable-sockets \
+            --with-gmp \
+            --with-openssl \
+            --with-zlib
+      - name: make
+        run: make -j$(/usr/bin/nproc) >/dev/null
+      - name: make install
+        run: sudo make install
+      - name: Benchmark
+        run: |
+          mkdir -p benchmark/profiles
+          sapi/cli/php -d opcache.enable=1 -d opcache.enable_cli=1 -d opcache.jit=tracing -d opcache.jit_buffer_size=64M Zend/bench.php | tee benchmark/profiles/bench.txt
+      - name: Archive Benchmark Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: profiles
+          path: benchmark/profiles
+          retention-days: 14
+
+  FREEBSD:
+    name: FREEBSD
+    runs-on: ubuntu-24.04
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v4
+      - name: apt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang ccache autoconf bison re2c pkg-config \
+            libxml2-dev libssl-dev zlib1g-dev
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: "FREEBSD"
+          append-timestamp: false
+          save: true
+      - name: FreeBSD Compatibility & POSIX Build Verification
+        run: |
+          export CC="ccache clang"
+          export CXX="ccache clang++"
+          export CFLAGS="-O2 -Wno-deprecated-declarations"
+          ./buildconf --force
+          ./configure \
+            --disable-all \
+            --enable-cli \
+            --enable-session \
+            --enable-opcache \
+            --with-zlib \
+            --with-openssl
+          make -j$(/usr/bin/nproc) >/dev/null
+          sapi/cli/php -v

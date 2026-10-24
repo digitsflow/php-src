@@ -353,22 +353,34 @@ static void xbuf_format_converter(void *xbuf, bool is_char, const char *fmt, va_
 			switch (*fmt) {
 				case 'Z': {
 					zval *zvp = va_arg(ap, zval*);
-					zend_string *str = zval_get_tmp_string(zvp, &tmp_str);
-					s_len = ZSTR_LEN(str);
-					s = ZSTR_VAL(str);
-					if (adjust_precision && (size_t)precision < s_len) {
-						s_len = precision;
+					if (EXPECTED(zvp != NULL)) {
+						zend_string *str = zval_get_tmp_string(zvp, &tmp_str);
+						s_len = ZSTR_LEN(str);
+						s = ZSTR_VAL(str);
+						if (adjust_precision && (size_t)precision < s_len) {
+							s_len = precision;
+						}
+					} else {
+						s = S_NULL;
+						s_len = S_NULL_LEN;
 					}
+					pad_char = ' ';
 					break;
 				}
 				case 'S': {
 format_zend_string:;
 					zend_string *str = va_arg(ap, zend_string*);
-					s_len = ZSTR_LEN(str);
-					s = ZSTR_VAL(str);
-					if (adjust_precision && (size_t)precision < s_len) {
-						s_len = precision;
+					if (EXPECTED(str != NULL)) {
+						s_len = ZSTR_LEN(str);
+						s = ZSTR_VAL(str);
+						if (adjust_precision && (size_t)precision < s_len) {
+							s_len = precision;
+						}
+					} else {
+						s = S_NULL;
+						s_len = S_NULL_LEN;
 					}
+					pad_char = ' ';
 					break;
 				}
 				case 'u':
@@ -677,7 +689,7 @@ format_zend_string:;
 							fmt++;
 							break;
 						default:
-							if (isalnum(*(fmt+1))) {
+							if (isalnum((unsigned char)*(fmt+1))) {
 								zend_error_noreturn(E_CORE_ERROR,
 									"Invalid printf specifier \"p%c\"", *(fmt+1));
 							}
