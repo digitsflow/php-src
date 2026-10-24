@@ -52,6 +52,7 @@ jobs:
             --enable-exif \
             --enable-soap \
             --enable-mbstring \
+            --enable-simplexml \
             --enable-opcache \
             --with-openssl \
             --with-zlib
