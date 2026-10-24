@@ -112,22 +112,18 @@ static const char _codes[26] =
 /* Look two letters down.  It makes sure you don't walk off the string. */
 #define After_Next_Letter	(Next_Letter != '\0' ? toupper(word[w_idx+2]) \
 											     : '\0')
-#define Look_Ahead_Letter(n) (toupper(Lookahead((char *) word+w_idx, n)))
+#define Look_Ahead_Letter(n) (toupper((unsigned char)Lookahead((char *) word+w_idx, n)))
 
 
 /* Allows us to safely look ahead an arbitrary # of letters */
 /* I probably could have just used strlen... */
-static char Lookahead(char *word, int how_far)
+static char Lookahead(char *word, size_t how_far)
 {
-	char letter_ahead = '\0';	/* null by default */
-	int idx;
+	size_t idx;
 	for (idx = 0; word[idx] != '\0' && idx < how_far; idx++);
 	/* Edge forward in the string... */
 
-	letter_ahead = word[idx];	/* idx will be either == to how_far or
-								 * at the end of the string
-								 */
-	return letter_ahead;
+	return word[idx];
 }
 
 
@@ -161,7 +157,7 @@ static char Lookahead(char *word, int how_far)
 /* {{{ metaphone */
 static void metaphone(unsigned char *word, size_t word_len, zend_long max_phonemes, zend_string **phoned_word, int traditional)
 {
-	int w_idx = 0;				/* point in the phonization we're at. */
+	size_t w_idx = 0;				/* point in the phonization we're at. */
 	size_t p_idx = 0;				/* end of the phoned phrase */
 	size_t max_buffer_len = 0;		/* maximum length of the destination buffer */
 	ZEND_ASSERT(word != NULL);
