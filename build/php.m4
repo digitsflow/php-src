@@ -63,7 +63,11 @@ AC_DEFUN([PHP_EXPAND_PATH],[
     changequote({,})
     ep_dir=$(echo $1|$SED 's%/*[^/][^/]*/*$%%')
     changequote([,])
-    ep_realdir=$(cd "$ep_dir" && pwd)
+    if test -z $ep_dir ; then
+      ep_realdir=$(pwd)
+    else
+      ep_realdir=$(cd "$ep_dir" && pwd)
+    fi
     $2="$ep_realdir"/$(basename "$1")
   fi
 ])
@@ -780,6 +784,14 @@ AC_DEFUN([PHP_BUILD_SHARED],[
 ])
 
 dnl
+dnl PHP_BUILD_SHARED_DYLIB
+dnl
+AC_DEFUN([PHP_BUILD_SHARED_DYLIB],[
+  PHP_BUILD_SHARED
+  OVERALL_TARGET=libphp.dylib
+])
+
+dnl
 dnl PHP_BUILD_STATIC
 dnl
 AC_DEFUN([PHP_BUILD_STATIC],[
@@ -894,6 +906,7 @@ AC_DEFUN([PHP_SELECT_SAPI],[
     case "$2" in
     static[)] PHP_BUILD_STATIC;;
     shared[)] PHP_BUILD_SHARED;;
+    shared-dylib[)] PHP_BUILD_SHARED_DYLIB;;
     bundle[)] PHP_BUILD_BUNDLE;;
     esac
     install_sapi="install-sapi"

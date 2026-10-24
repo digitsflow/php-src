@@ -353,12 +353,20 @@ jobs:
     steps:
       - name: git checkout
         uses: actions/checkout@v4
-      - name: FreeBSD Compatibility & POSIX Build Verification
+      - name: apt
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential clang ccache autoconf bison re2c pkg-config \
             libxml2-dev libssl-dev zlib1g-dev
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: "FREEBSD"
+          append-timestamp: false
+          save: true
+      - name: FreeBSD Compatibility & POSIX Build Verification
+        run: |
           export CC="ccache clang"
           export CXX="ccache clang++"
           export CFLAGS="-O2 -Wno-deprecated-declarations"

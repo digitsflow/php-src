@@ -22,6 +22,29 @@
 #include <stddef.h>
 #include "php_network.h"
 #include "file.h"
+#include "streams/php_streams_int.h"
+
+static size_t php_fsockopen_format_host_port(char **message, const char *prefix, size_t prefix_len,
+	const char *host, size_t host_len, zend_long port)
+{
+    char portbuf[32];
+    int portlen = snprintf(portbuf, sizeof(portbuf), ":" ZEND_LONG_FMT, port);
+    size_t total_len = prefix_len + host_len + portlen;
+
+    char *result = emalloc(total_len + 1); 
+
+	if (prefix_len > 0) {
+    	memcpy(result, prefix, prefix_len);
+	}
+    memcpy(result + prefix_len, host, host_len);
+    memcpy(result + prefix_len + host_len, portbuf, portlen);
+
+    result[total_len] = '\0';
+
+    *message = result;
+
+	return total_len;
+}
 
 /* {{{ php_fsockopen() */
 
@@ -62,11 +85,13 @@ static void php_fsockopen_stream(INTERNAL_FUNCTION_PARAMETERS, int persistent)
 	}
 
 	if (persistent) {
-		spprintf(&hashkey, 0, "pfsockopen__%s:" ZEND_LONG_FMT, host, port);
+		zend_string *escaped = php_stream_escape_persistent_key(host, host_len);
+		spprintf(&hashkey, 0, "pfsockopen__%s:"  ZEND_LONG_FMT, ZSTR_VAL(escaped), port);
+		zend_string_release_ex(escaped, false);
 	}
 
 	if (port > 0) {
-		hostname_len = spprintf(&hostname, 0, "%s:" ZEND_LONG_FMT, host, port);
+		hostname_len = php_fsockopen_format_host_port(&hostname, "", 0, host, host_len, port);
 	} else {
 		hostname_len = host_len;
 		hostname = host;
@@ -82,7 +107,7 @@ static void php_fsockopen_stream(INTERNAL_FUNCTION_PARAMETERS, int persistent)
 			efree(hashkey);
 		}
 
-		zend_argument_value_error(6, "must be -1 or between 0 and " ZEND_ULONG_FMT, ((double) PHP_TIMEOUT_ULL_MAX / 1000000.0));
+		zend_argument_value_error(5, "must be -1 or between 0 and %" PRIu64, (uint64_t) ((double) PHP_TIMEOUT_ULL_MAX / 1000000.0));
 		RETURN_THROWS();
 	} else {
 #ifndef PHP_WIN32

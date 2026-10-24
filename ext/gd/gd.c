@@ -556,7 +556,7 @@ PHP_FUNCTION(imageloadfont)
 	 */
 	font = (gdFontPtr) emalloc(sizeof(gdFont));
 	b = 0;
-	while (b < hdr_size && (n = php_stream_read(stream, (char*)&font[b], hdr_size - b)) > 0) {
+	while (b < hdr_size && (n = php_stream_read(stream, (char *) font + b, hdr_size - b)) > 0) {
 		b += n;
 	}
 
@@ -836,6 +836,11 @@ PHP_FUNCTION(imagefilledellipse)
 		Z_PARAM_LONG(h)
 		Z_PARAM_LONG(color)
 	ZEND_PARSE_PARAMETERS_END();
+
+    if (w < 0 || ZEND_LONG_INT_OVFL(w)) {
+        zend_argument_value_error(4, "must be between 0 and %d", INT_MAX);
+        RETURN_THROWS();
+    }
 
 	im = php_gd_libgdimageptr_from_zval_p(IM);
 
@@ -1610,7 +1615,7 @@ static void _php_image_create_from(INTERNAL_FUNCTION_PARAMETERS, int image_type,
 		pefree(pstr, 1);
 		zend_string_release_ex(buff, 0);
 	}
-	else if (php_stream_can_cast(stream, PHP_STREAM_AS_STDIO)) {
+	else if (php_stream_can_cast(stream, PHP_STREAM_AS_STDIO) == SUCCESS) {
 		/* try and force the stream to be FILE* */
 		if (FAILURE == php_stream_cast(stream, PHP_STREAM_AS_STDIO | PHP_STREAM_CAST_TRY_HARD, (void **) &fp, REPORT_ERRORS)) {
 			goto out_err;
@@ -2493,8 +2498,18 @@ PHP_FUNCTION(imagegammacorrect)
 		RETURN_THROWS();
 	}
 
+	if (!zend_finite(input)) {
+		zend_argument_value_error(2, "must be finite");
+		RETURN_THROWS();
+	}
+
 	if (output <= 0.0) {
 		zend_argument_value_error(3, "must be greater than 0");
+		RETURN_THROWS();
+	}
+
+	if (!zend_finite(output)) {
+		zend_argument_value_error(3, "must be finite");
 		RETURN_THROWS();
 	}
 
@@ -3008,7 +3023,8 @@ static void php_imagechar(INTERNAL_FUNCTION_PARAMETERS, int mode)
 	zend_long X, Y, COL;
 	zend_string *C;
 	gdImagePtr im;
-	int ch = 0, col, x, y, i, l = 0;
+	int ch = 0, col, i, l = 0;
+	unsigned int x, y;
 	unsigned char *str = NULL;
 	zend_object *font_obj = NULL;
 	zend_long font_int = 0;
@@ -3040,21 +3056,21 @@ static void php_imagechar(INTERNAL_FUNCTION_PARAMETERS, int mode)
 
 	switch (mode) {
 		case 0:
-			gdImageChar(im, font, x, y, ch, col);
+			gdImageChar(im, font, (int)x, (int)y, ch, col);
 			break;
 		case 1:
 			php_gdimagecharup(im, font, x, y, ch, col);
 			break;
 		case 2:
 			for (i = 0; (i < l); i++) {
-				gdImageChar(im, font, x, y, (int) ((unsigned char) str[i]), col);
+				gdImageChar(im, font, (int)x, (int)y, (int) ((unsigned char) str[i]), col);
 				x += font->w;
 			}
 			break;
 		case 3: {
 			for (i = 0; (i < l); i++) {
 				/* php_gdimagecharup(im, font, x, y, (int) str[i], col); */
-				gdImageCharUp(im, font, x, y, (int) str[i], col);
+				gdImageCharUp(im, font, (int)x, (int)y, (int) str[i], col);
 				y -= font->w;
 			}
 			break;
@@ -3376,6 +3392,17 @@ static void php_imagettftext_common(INTERNAL_FUNCTION_PARAMETERS, int mode)
 			RETURN_THROWS();
 		}
 		im = php_gd_libgdimageptr_from_zval_p(IM);
+	}
+
+	// FT_F26Dot6 is a signed long alias
+	if (ptsize < (double)LONG_MIN / 64 || ptsize > (double)LONG_MAX / 64) {
+		zend_argument_value_error(2, "must be between " ZEND_LONG_FMT " and " ZEND_LONG_FMT, (zend_long)((double)LONG_MIN / 64), (zend_long)((double)LONG_MAX / 64));
+		RETURN_THROWS();
+	}
+
+	if (UNEXPECTED(!zend_finite(ptsize))) {
+		zend_argument_value_error(2, "must be finite");
+		RETURN_THROWS();
 	}
 
 	/* convert angle to radians */
@@ -3716,9 +3743,11 @@ PHP_FUNCTION(imagefilter)
 		RETURN_THROWS();
 	}
 
-	if (filtertype >= 0 && filtertype <= IMAGE_FILTER_MAX) {
-		filters[filtertype](INTERNAL_FUNCTION_PARAM_PASSTHRU);
+	if (UNEXPECTED(filtertype < 0 || filtertype > IMAGE_FILTER_MAX)) {
+		zend_argument_value_error(2, "must be one of the IMG_FILTER_* filter constants");
+		RETURN_THROWS();
 	}
+	filters[filtertype](INTERNAL_FUNCTION_PARAM_PASSTHRU);
 }
 /* }}} */
 
@@ -3748,7 +3777,7 @@ PHP_FUNCTION(imageconvolution)
 	}
 
 	for (i=0; i<3; i++) {
-		if ((var = zend_hash_index_find(Z_ARRVAL_P(hash_matrix), (i))) != NULL && Z_TYPE_P(var) == IS_ARRAY) {
+		if ((var = zend_hash_index_find_deref(Z_ARRVAL_P(hash_matrix), (i))) != NULL && Z_TYPE_P(var) == IS_ARRAY) {
 			if (zend_hash_num_elements(Z_ARRVAL_P(var)) != 3 ) {
 				zend_argument_value_error(2, "must be a 3x3 array, matrix[%d] only has %d elements", i, zend_hash_num_elements(Z_ARRVAL_P(var)));
 				RETURN_THROWS();
@@ -3894,6 +3923,26 @@ PHP_FUNCTION(imagecrop)
 		RETURN_THROWS();
 	}
 
+	if ((rect.width > 0 && rect.x > INT_MAX - rect.width)) {
+		zend_argument_value_error(2, "overflow with \"x\" and \"width\" keys");
+		RETURN_THROWS();
+	}
+
+	if ((rect.width < 0 && rect.x < INT_MIN - rect.width)) {
+		zend_argument_value_error(2, "underflow with \"x\" and \"width\" keys");
+		RETURN_THROWS();
+	}
+
+	if ((rect.height > 0 && rect.y > INT_MAX - rect.height)) {
+		zend_argument_value_error(2, "overflow with \"y\" and \"height\" keys");
+		RETURN_THROWS();
+	}
+
+	if ((rect.height < 0 && rect.y < INT_MIN - rect.height)) {
+		zend_argument_value_error(2, "underflow with \"y\" and \"height\" keys");
+		RETURN_THROWS();
+	}
+
 	im_crop = gdImageCrop(im, &rect);
 
 	if (im_crop == NULL) {
@@ -3994,9 +4043,17 @@ PHP_FUNCTION(imagescale)
 		src_y = gdImageSY(im);
 
 		if (src_x && tmp_h < 0) {
+			if (tmp_w > (ZEND_LONG_MAX / src_y)) {
+				zend_argument_value_error(2, "must be less than or equal to " ZEND_LONG_FMT, (zend_long)(ZEND_LONG_MAX / src_y));
+				RETURN_THROWS();
+			}
 			tmp_h = tmp_w * src_y / src_x;
 		}
 		if (src_y && tmp_w < 0) {
+			if (tmp_h > (ZEND_LONG_MAX / src_x)) {
+				zend_argument_value_error(3, "must be less than or equal to " ZEND_LONG_FMT, (zend_long)(ZEND_LONG_MAX / src_x));
+				RETURN_THROWS();
+			}
 			tmp_w = tmp_h * src_x / src_y;
 		}
 	}
@@ -4061,7 +4118,7 @@ PHP_FUNCTION(imageaffine)
 	}
 
 	for (i = 0; i < nelems; i++) {
-		if ((zval_affine_elem = zend_hash_index_find(Z_ARRVAL_P(z_affine), i)) != NULL) {
+		if ((zval_affine_elem = zend_hash_index_find_deref(Z_ARRVAL_P(z_affine), i)) != NULL) {
 			switch (Z_TYPE_P(zval_affine_elem)) {
 				case IS_LONG:
 					affine[i] = Z_LVAL_P(zval_affine_elem);
@@ -4153,7 +4210,7 @@ PHP_FUNCTION(imageaffinematrixget)
 		case GD_AFFINE_SCALE: {
 			double x, y;
 			if (Z_TYPE_P(options) != IS_ARRAY) {
-				zend_argument_type_error(1, "must be of type array when using translate or scale");
+				zend_argument_type_error(2, "must be of type array when using translate or scale");
 				RETURN_THROWS();
 			}
 
@@ -4234,12 +4291,12 @@ PHP_FUNCTION(imageaffinematrixconcat)
 	}
 
 	if (zend_hash_num_elements(Z_ARRVAL_P(z_m2)) != 6) {
-		zend_argument_value_error(1, "must have 6 elements");
+		zend_argument_value_error(2, "must have 6 elements");
 		RETURN_THROWS();
 	}
 
 	for (i = 0; i < 6; i++) {
-		if ((tmp = zend_hash_index_find(Z_ARRVAL_P(z_m1), i)) != NULL) {
+		if ((tmp = zend_hash_index_find_deref(Z_ARRVAL_P(z_m1), i)) != NULL) {
 			switch (Z_TYPE_P(tmp)) {
 				case IS_LONG:
 					m1[i]  = Z_LVAL_P(tmp);
@@ -4256,7 +4313,7 @@ PHP_FUNCTION(imageaffinematrixconcat)
 			}
 		}
 
-		if ((tmp = zend_hash_index_find(Z_ARRVAL_P(z_m2), i)) != NULL) {
+		if ((tmp = zend_hash_index_find_deref(Z_ARRVAL_P(z_m2), i)) != NULL) {
 			switch (Z_TYPE_P(tmp)) {
 				case IS_LONG:
 					m2[i]  = Z_LVAL_P(tmp);
@@ -4407,21 +4464,39 @@ static void _php_image_output_ctxfree(struct gdIOCtx *ctx) /* {{{ */
 	efree(ctx);
 } /* }}} */
 
+typedef struct {
+	gdIOCtx ctx;
+	size_t buf_len;
+	unsigned char buf[8192];
+} php_gd_stream_ctx;
+
+static void _php_image_stream_flush(php_gd_stream_ctx *stream_ctx) /* {{{ */
+{
+	if (stream_ctx->buf_len) {
+		php_stream_write((php_stream *) stream_ctx->ctx.data, (char *) stream_ctx->buf, stream_ctx->buf_len);
+		stream_ctx->buf_len = 0;
+	}
+} /* }}} */
+
 static void _php_image_stream_putc(struct gdIOCtx *ctx, int c) /* {{{ */ {
-	char ch = (char) c;
-	php_stream * stream = (php_stream *)ctx->data;
-	php_stream_write(stream, &ch, 1);
+	php_gd_stream_ctx *stream_ctx = (php_gd_stream_ctx *) ctx;
+	if (stream_ctx->buf_len == sizeof(stream_ctx->buf)) {
+		_php_image_stream_flush(stream_ctx);
+	}
+	stream_ctx->buf[stream_ctx->buf_len++] = (unsigned char) c;
 } /* }}} */
 
 static int _php_image_stream_putbuf(struct gdIOCtx *ctx, const void* buf, int l) /* {{{ */
 {
 	php_stream * stream = (php_stream *)ctx->data;
+	_php_image_stream_flush((php_gd_stream_ctx *) ctx);
 	return php_stream_write(stream, (void *)buf, l);
 } /* }}} */
 
 static void _php_image_stream_ctxfree(struct gdIOCtx *ctx) /* {{{ */
 {
 	if(ctx->data) {
+		_php_image_stream_flush((php_gd_stream_ctx *) ctx);
 		ctx->data = NULL;
 	}
 	efree(ctx);
@@ -4430,6 +4505,7 @@ static void _php_image_stream_ctxfree(struct gdIOCtx *ctx) /* {{{ */
 static void _php_image_stream_ctxfreeandclose(struct gdIOCtx *ctx) /* {{{ */
 {
 	if(ctx->data) {
+		_php_image_stream_flush((php_gd_stream_ctx *) ctx);
 		php_stream_close((php_stream *) ctx->data);
 		ctx->data = NULL;
 	}
@@ -4437,7 +4513,8 @@ static void _php_image_stream_ctxfreeandclose(struct gdIOCtx *ctx) /* {{{ */
 } /* }}} */
 
 static gdIOCtx *create_stream_context(php_stream *stream, int close_stream) {
-	gdIOCtx *ctx = ecalloc(1, sizeof(gdIOCtx));
+	php_gd_stream_ctx *stream_ctx = ecalloc(1, sizeof(php_gd_stream_ctx));
+	gdIOCtx *ctx = &stream_ctx->ctx;
 
 	ctx->putC = _php_image_stream_putc;
 	ctx->putBuf = _php_image_stream_putbuf;

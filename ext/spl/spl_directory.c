@@ -297,6 +297,11 @@ static void spl_filesystem_dir_open(spl_filesystem_object* intern, zend_string *
 	intern->type = SPL_FS_DIR;
 	intern->u.dir.dirp = php_stream_opendir(ZSTR_VAL(path), REPORT_ERRORS, FG(default_context));
 
+	if (intern->u.dir.dirp) {
+		/* we prevent potential UAF with conflicting explicit fclose(), relying on the object destructor for this */
+		intern->u.dir.dirp->flags |= PHP_STREAM_FLAG_NO_FCLOSE;
+	}
+
 	if (ZSTR_LEN(path) > 1 && IS_SLASH_AT(ZSTR_VAL(path), ZSTR_LEN(path)-1)) {
 		intern->path = zend_string_init(ZSTR_VAL(path), ZSTR_LEN(path)-1, 0);
 	} else {
@@ -1236,11 +1241,11 @@ PHP_METHOD(SplFileInfo, getLinkTarget)
 			RETURN_THROWS();
 		}
 	}
-#if defined(PHP_WIN32) || defined(HAVE_SYMLINK)
 	if (intern->file_name == NULL) {
 		zend_value_error("Filename must not be empty");
 		RETURN_THROWS();
 	}
+#if defined(PHP_WIN32) || defined(HAVE_SYMLINK)
 	if (!IS_ABSOLUTE_PATH(ZSTR_VAL(intern->file_name), ZSTR_LEN(intern->file_name))) {
 		char expanded_path[MAXPATHLEN];
 		if (!expand_filepath_with_mode(ZSTR_VAL(intern->file_name), expanded_path, NULL, 0, CWD_EXPAND )) {
@@ -1256,7 +1261,7 @@ PHP_METHOD(SplFileInfo, getLinkTarget)
 #endif
 
 	if (ret == -1) {
-		zend_throw_exception_ex(spl_ce_RuntimeException, 0, "Unable to read link %s, error: %s", ZSTR_VAL(intern->file_name), strerror(errno));
+		zend_throw_exception_ex(spl_ce_RuntimeException, 0, "Unable to read link %pS, error: %s", intern->file_name, strerror(errno));
 		RETVAL_FALSE;
 	} else {
 		/* Append NULL to the end of the string */
@@ -2219,6 +2224,8 @@ PHP_METHOD(SplFileObject, next)
 		RETURN_THROWS();
 	}
 
+	CHECK_SPL_FILE_OBJECT_IS_INITIALIZED(intern);
+
 	spl_filesystem_file_free_line(intern);
 	if (SPL_HAS_FLAG(intern->flags, SPL_FILE_OBJECT_READ_AHEAD)) {
 		spl_filesystem_file_read_line(ZEND_THIS, intern, true);
@@ -2370,6 +2377,8 @@ PHP_METHOD(SplFileObject, fputcsv)
 	if (zend_parse_parameters(ZEND_NUM_ARGS(), "a|ssSS", &fields, &delim, &d_len, &enclo, &e_len, &escape_str, &eol) == FAILURE) {
 		RETURN_THROWS();
 	}
+
+	CHECK_SPL_FILE_OBJECT_IS_INITIALIZED(intern);
 
 	if (delim) {
 		if (d_len != 1) {

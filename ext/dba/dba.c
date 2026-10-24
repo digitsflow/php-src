@@ -57,6 +57,7 @@ ZEND_BEGIN_MODULE_GLOBALS(dba)
 	const char *default_handler;
 	const dba_handler *default_hptr;
 	HashTable connections;
+	unsigned int connection_counter;
 ZEND_END_MODULE_GLOBALS(dba)
 
 ZEND_DECLARE_MODULE_GLOBALS(dba)
@@ -255,14 +256,14 @@ static void dba_close_info(dba_info *info)
 		if (info->flags & DBA_PERSISTENT) {
 			php_stream_pclose(info->fp);
 		} else {
-			php_stream_close(info->fp);
+			php_stream_free(info->fp, PHP_STREAM_FREE_CLOSE | PHP_STREAM_FREE_RSRC_DTOR);
 		}
 	}
 	if (info->lock.fp) {
 		if (info->flags & DBA_PERSISTENT) {
 			php_stream_pclose(info->lock.fp);
 		} else {
-			php_stream_close(info->lock.fp);
+			php_stream_free(info->lock.fp, PHP_STREAM_FREE_CLOSE | PHP_STREAM_FREE_RSRC_DTOR);
 		}
 	}
 
@@ -517,6 +518,17 @@ static zend_always_inline zend_string *php_dba_zend_string_dup_safe(zend_string 
 	}
 }
 
+/* See mysqlnd_fixup_regular_list */
+static void php_dba_fixup_regular_list(php_stream *stream)
+{
+	dtor_func_t origin_dtor = EG(regular_list).pDestructor;
+	EG(regular_list).pDestructor = NULL;
+	zend_hash_index_del(&EG(regular_list), stream->res->handle);
+	EG(regular_list).pDestructor = origin_dtor;
+	efree(stream->res);
+	stream->res = NULL;
+}
+
 /* {{{ php_dba_open */
 static void php_dba_open(INTERNAL_FUNCTION_PARAMETERS, bool persistent)
 {
@@ -571,7 +583,7 @@ static void php_dba_open(INTERNAL_FUNCTION_PARAMETERS, bool persistent)
 
 	char *resource_key;
 	size_t resource_key_len = spprintf(&resource_key, 0,
-		"dba_%d_%s_%s_%s", persistent, ZSTR_VAL(path), ZSTR_VAL(mode), handler_str ? ZSTR_VAL(handler_str) : ""
+		"dba_%d_%u_%s_%s_%s", persistent, persistent ? 0 : DBA_G(connection_counter)++, ZSTR_VAL(path), ZSTR_VAL(mode), handler_str ? ZSTR_VAL(handler_str) : ""
 	);
 
 	if (persistent) {
@@ -830,6 +842,9 @@ restart:
 				/* do not log errors for .lck file while in read only mode on .lck file */
 				lock_file_mode = "rb";
 				connection->info->lock.fp = php_stream_open_wrapper(lock_name, lock_file_mode, STREAM_MUST_SEEK|IGNORE_PATH|persistent_flag, &opened_path);
+				if (connection->info->lock.fp && !persistent_flag) {
+					php_dba_fixup_regular_list(connection->info->lock.fp);
+				}
 				if (opened_path) {
 					zend_string_release_ex(opened_path, 0);
 				}
@@ -843,6 +858,9 @@ restart:
 			zend_string *opened_path = NULL;
 			connection->info->lock.fp = php_stream_open_wrapper(lock_name, lock_file_mode, STREAM_MUST_SEEK|REPORT_ERRORS|IGNORE_PATH|persistent_flag, &opened_path);
 			if (connection->info->lock.fp) {
+				if (!persistent_flag) {
+					php_dba_fixup_regular_list(connection->info->lock.fp);
+				}
 				if (is_db_lock) {
 					if (opened_path) {
 						/* replace the path info with the real path of the opened file */
@@ -863,9 +881,7 @@ restart:
 		}
 		if (!connection->info->lock.fp) {
 			/* stream operation already wrote an error message */
-			efree(resource_key);
-			zval_ptr_dtor(return_value);
-			RETURN_FALSE;
+			goto fail;
 		}
 		if (!error && !php_stream_supports_lock(connection->info->lock.fp)) {
 			error = "Stream does not support locking";
@@ -881,12 +897,13 @@ restart:
 			connection->info->fp = connection->info->lock.fp; /* use the same stream for locking and database access */
 		} else {
 			connection->info->fp = php_stream_open_wrapper(ZSTR_VAL(connection->info->path), file_mode, STREAM_MUST_SEEK|REPORT_ERRORS|IGNORE_PATH|persistent_flag, NULL);
+			if (connection->info->fp && !persistent_flag) {
+				php_dba_fixup_regular_list(connection->info->fp);
+			}
 		}
 		if (!connection->info->fp) {
 			/* stream operation already wrote an error message */
-			efree(resource_key);
-			zval_ptr_dtor(return_value);
-			RETURN_FALSE;
+			goto fail;
 		}
 		if (hptr->flags & (DBA_NO_APPEND|DBA_CAST_AS_FD)) {
 			/* Needed because some systems do not allow to write to the original
@@ -894,9 +911,7 @@ restart:
 			 */
 			if (SUCCESS != php_stream_cast(connection->info->fp, PHP_STREAM_AS_FD, (void*)&connection->info->fd, 1)) {
 				php_error_docref(NULL, E_WARNING, "Could not cast stream");
-				efree(resource_key);
-				zval_ptr_dtor(return_value);
-				RETURN_FALSE;
+				goto fail;
 #ifdef F_SETFL
 			} else if (modenr == DBA_CREAT) {
 				int flags = fcntl(connection->info->fd, F_GETFL);
@@ -930,9 +945,7 @@ restart:
 				php_error_docref(NULL, E_WARNING, "Driver initialization failed for handler: %s", hptr->name);
 			}
 		}
-		efree(resource_key);
-		zval_ptr_dtor(return_value);
-		RETURN_FALSE;
+		goto fail;
 	}
 
 	connection->info->hnd = hptr;
@@ -941,6 +954,7 @@ restart:
 		if (zend_register_persistent_resource(resource_key, resource_key_len, connection->info, le_pdb) == NULL) {
 			php_error_docref(NULL, E_WARNING, "Could not register persistent resource");
 			efree(resource_key);
+			dba_close_connection(connection);
 			zval_ptr_dtor(return_value);
 			RETURN_FALSE;
 		}
@@ -948,6 +962,14 @@ restart:
 
 	zend_hash_add_new(&DBA_G(connections), connection->hash, return_value);
 	efree(resource_key);
+	return;
+fail:
+	efree(resource_key);
+	zend_string_release_ex(connection->hash, persistent);
+	dba_close_info(connection->info);
+	connection->info = NULL;
+	zval_ptr_dtor(return_value);
+	RETURN_FALSE;
 }
 /* }}} */
 
@@ -1046,6 +1068,11 @@ PHP_FUNCTION(dba_fetch)
 			Z_PARAM_OPTIONAL
 			Z_PARAM_LONG(skip)
 		ZEND_PARSE_PARAMETERS_END();
+	}
+
+	if (ZEND_LONG_EXCEEDS_INT(skip)) {
+		zend_argument_value_error(3, "must be between %d and %d", INT_MIN, INT_MAX);
+		RETURN_THROWS();
 	}
 
 	info = Z_DBA_INFO_P(id);

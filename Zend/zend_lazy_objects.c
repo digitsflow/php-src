@@ -179,6 +179,20 @@ bool zend_lazy_object_decr_lazy_props(zend_object *obj)
 	return info->lazy_properties_count == 0;
 }
 
+#if ZEND_DEBUG
+/* See zend_update_class_constants(). */
+static zend_always_inline bool zend_class_constants_are_updated(const zend_class_entry *ce) {
+	if (ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED) {
+		return true;
+	}
+	if (ZEND_MAP_PTR(ce->mutable_data)) {
+		const zend_class_mutable_data *mutable_data = ZEND_MAP_PTR_GET_IMM(ce->mutable_data);
+		return mutable_data && (mutable_data->ce_flags & ZEND_ACC_CONSTANTS_UPDATED);
+	}
+	return false;
+}
+#endif
+
 /**
  * Making objects lazy
  */
@@ -259,23 +273,24 @@ ZEND_API zend_object *zend_object_make_lazy(zend_object *obj,
 			return NULL;
 		}
 
-		if (UNEXPECTED(!(reflection_ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED))) {
-			if (UNEXPECTED(zend_update_class_constants(reflection_ce) != SUCCESS)) {
-				ZEND_ASSERT(EG(exception));
-				return NULL;
-			}
+		if (UNEXPECTED(zend_update_class_constants(reflection_ce) != SUCCESS)) {
+			ZEND_ASSERT(EG(exception));
+			return NULL;
 		}
 
 		obj = zend_objects_new(reflection_ce);
 
-		for (int i = 0; i < obj->ce->default_properties_count; i++) {
+		/* Iterate in reverse to avoid overriding Z_PROP_FLAG_P() of child props with added hooks (GH-17870). */
+		for (int i = obj->ce->default_properties_count - 1; i >= 0; i--) {
 			zval *p = &obj->properties_table[i];
 			ZVAL_UNDEF(p);
-			if (EXPECTED(obj->ce->properties_info_table[i])) {
+			Z_PROP_FLAG_P(p) = 0;
+
+			zend_property_info *prop_info = obj->ce->properties_info_table[i];
+			if (prop_info) {
+				zval *p = &obj->properties_table[OBJ_PROP_TO_NUM(prop_info->offset)];
 				Z_PROP_FLAG_P(p) = IS_PROP_UNINIT | IS_PROP_LAZY;
 				lazy_properties_count++;
-			} else {
-				Z_PROP_FLAG_P(p) = 0;
 			}
 		}
 	} else {
@@ -326,7 +341,7 @@ ZEND_API zend_object *zend_object_make_lazy(zend_object *obj,
 		for (int i = 0; i < reflection_ce->default_properties_count; i++) {
 			zend_property_info *prop_info = obj->ce->properties_info_table[i];
 			if (EXPECTED(prop_info)) {
-				zval *p = &obj->properties_table[i];
+				zval *p = &obj->properties_table[OBJ_PROP_TO_NUM(prop_info->offset)];
 				if (Z_TYPE_P(p) != IS_UNDEF) {
 					if ((prop_info->flags & ZEND_ACC_READONLY) && !(Z_PROP_FLAG_P(p) & IS_PROP_REINITABLE)
 							/* TODO: test final property */
@@ -380,7 +395,9 @@ ZEND_API zend_object *zend_lazy_object_mark_as_initialized(zend_object *obj)
 
 	zend_class_entry *ce = obj->ce;
 
-	ZEND_ASSERT(ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED);
+#if ZEND_DEBUG
+	ZEND_ASSERT(zend_class_constants_are_updated(ce));
+#endif
 
 	zval *default_properties_table = CE_DEFAULT_PROPERTIES_TABLE(ce);
 	zval *properties_table = obj->properties_table;
@@ -408,12 +425,16 @@ static void zend_lazy_object_revert_init(zend_object *obj, zval *properties_tabl
 		zval *properties_table = obj->properties_table;
 
 		for (int i = 0; i < ce->default_properties_count; i++) {
-			zval *p = &properties_table[i];
-			zend_object_dtor_property(obj, p);
-			ZVAL_COPY_VALUE_PROP(p, &properties_table_snapshot[i]);
-
 			zend_property_info *prop_info = ce->properties_info_table[i];
-			if (Z_ISREF_P(p) && prop_info && ZEND_TYPE_IS_SET(prop_info->type)) {
+			if (!prop_info) {
+				continue;
+			}
+
+			zval *p = &properties_table[OBJ_PROP_TO_NUM(prop_info->offset)];
+			zend_object_dtor_property(obj, p);
+			ZVAL_COPY_VALUE_PROP(p, &properties_table_snapshot[OBJ_PROP_TO_NUM(prop_info->offset)]);
+
+			if (Z_ISREF_P(p) && ZEND_TYPE_IS_SET(prop_info->type)) {
 				ZEND_REF_ADD_TYPE_SOURCE(Z_REF_P(p), prop_info);
 			}
 		}
@@ -526,10 +547,12 @@ static zend_object *zend_lazy_object_init_proxy(zend_object *obj)
 	obj->properties = NULL;
 
 	for (int i = 0; i < Z_OBJ(retval)->ce->default_properties_count; i++) {
-		if (EXPECTED(Z_OBJ(retval)->ce->properties_info_table[i])) {
-			zend_object_dtor_property(obj, &obj->properties_table[i]);
-			ZVAL_UNDEF(&obj->properties_table[i]);
-			Z_PROP_FLAG_P(&obj->properties_table[i]) = IS_PROP_UNINIT | IS_PROP_LAZY;
+		zend_property_info *prop_info = Z_OBJ(retval)->ce->properties_info_table[i];
+		if (EXPECTED(prop_info)) {
+			zval *prop = &obj->properties_table[OBJ_PROP_TO_NUM(prop_info->offset)];
+			zend_object_dtor_property(obj, prop);
+			ZVAL_UNDEF(prop);
+			Z_PROP_FLAG_P(prop) = IS_PROP_UNINIT | IS_PROP_LAZY;
 		}
 	}
 
@@ -570,7 +593,9 @@ ZEND_API zend_object *zend_lazy_object_init(zend_object *obj)
 
 	zend_class_entry *ce = obj->ce;
 
-	ZEND_ASSERT(ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED);
+#if ZEND_DEBUG
+	ZEND_ASSERT(zend_class_constants_are_updated(ce));
+#endif
 
 	if (zend_object_is_lazy_proxy(obj)) {
 		return zend_lazy_object_init_proxy(obj);
@@ -669,8 +694,6 @@ void zend_lazy_object_realize(zend_object *obj)
 	ZEND_ASSERT(zend_object_is_lazy(obj));
 	ZEND_ASSERT(!zend_lazy_object_initialized(obj));
 
-	zend_lazy_object_del_info(obj);
-
 #if ZEND_DEBUG
 	for (int i = 0; i < obj->ce->default_properties_count; i++) {
 		ZEND_ASSERT(!(Z_PROP_FLAG_P(&obj->properties_table[i]) & IS_PROP_LAZY));
@@ -678,6 +701,7 @@ void zend_lazy_object_realize(zend_object *obj)
 #endif
 
 	OBJ_EXTRA_FLAGS(obj) &= ~(IS_OBJ_LAZY_UNINITIALIZED | IS_OBJ_LAZY_PROXY);
+	zend_lazy_object_del_info(obj);
 }
 
 ZEND_API HashTable *zend_lazy_object_get_properties(zend_object *object)
@@ -722,22 +746,24 @@ zend_object *zend_lazy_object_clone(zend_object *old_obj)
 	zend_class_entry *ce = old_obj->ce;
 	zend_object *new_proxy = zend_objects_new(ce);
 
-	for (int i = 0; i < ce->default_properties_count; i++) {
+	/* Iterate in reverse to avoid overriding Z_PROP_FLAG_P() of child props with added hooks (GH-17870). */
+	for (int i = ce->default_properties_count - 1; i >= 0; i--) {
 		zval *p = &new_proxy->properties_table[i];
 		ZVAL_UNDEF(p);
-		if (EXPECTED(ce->properties_info_table[i])) {
+		Z_PROP_FLAG_P(p) = 0;
+
+		zend_property_info *prop_info = ce->properties_info_table[i];
+		if (prop_info) {
+			zval *p = &new_proxy->properties_table[OBJ_PROP_TO_NUM(prop_info->offset)];
 			Z_PROP_FLAG_P(p) = IS_PROP_UNINIT | IS_PROP_LAZY;
-		} else {
-			Z_PROP_FLAG_P(p) = 0;
 		}
 	}
-
-	OBJ_EXTRA_FLAGS(new_proxy) = OBJ_EXTRA_FLAGS(old_obj);
 
 	zend_lazy_object_info *new_info = emalloc(sizeof(*info));
 	*new_info = *info;
 	new_info->u.instance = zend_objects_clone_obj(info->u.instance);
 
+	OBJ_EXTRA_FLAGS(new_proxy) = OBJ_EXTRA_FLAGS(old_obj);
 	zend_lazy_object_set_info(new_proxy, new_info);
 
 	return new_proxy;
@@ -787,16 +813,28 @@ HashTable *zend_lazy_object_get_gc(zend_object *zobj, zval **table, int *n)
 	}
 	zend_get_gc_buffer_add_zval(gc_buffer, &info->u.initializer.zv);
 
-	/* Uninitialized lazy objects can not have dynamic properties, so we can
-	 * ignore zobj->properties. */
-	zval *prop = zobj->properties_table;
-	zval *end = prop + zobj->ce->default_properties_count;
-	for ( ; prop < end; prop++) {
-		zend_get_gc_buffer_add_zval(gc_buffer, prop);
+	/* Lazy objects may have a properties ht in two cases:
+	 * - After fetching debug infos
+	 * - After lazy init failed in zend_std_get_properties()
+	 *
+	 * In the latter case zobj->properties is an empty ht. We should ignore it,
+	 * otherwise we may mask references to the GC. In the former case we must
+	 * return it, otherwise the GC may traverse properties twice in case the ht
+	 * it a root by itself. */
+	zend_array *ht;
+	if (zobj->properties && zend_hash_num_elements(zobj->properties) > 0) {
+		ht = zobj->properties;
+	} else {
+		zval *prop = zobj->properties_table;
+		zval *end = prop + zobj->ce->default_properties_count;
+		for ( ; prop < end; prop++) {
+			zend_get_gc_buffer_add_zval(gc_buffer, prop);
+		}
+		ht = NULL;
 	}
 
 	zend_get_gc_buffer_use(gc_buffer, table, n);
-	return NULL;
+	return ht;
 }
 
 zend_property_info *zend_lazy_object_get_property_info_for_slot(zend_object *obj, zval *slot)
@@ -806,7 +844,11 @@ zend_property_info *zend_lazy_object_get_property_info_for_slot(zend_object *obj
 	zend_property_info **table = obj->ce->properties_info_table;
 	intptr_t prop_num = slot - obj->properties_table;
 	if (prop_num >= 0 && prop_num < obj->ce->default_properties_count) {
-		return table[prop_num];
+		if (table[prop_num]) {
+			return table[prop_num];
+		} else {
+			return zend_get_property_info_for_slot_slow(obj, slot);
+		}
 	}
 
 	if (!zend_lazy_object_initialized(obj)) {

@@ -84,7 +84,7 @@ function processStubFile(string $stubFile, Context $context, bool $includeOnly =
         }
 
         /* Because exit() and die() are proper token/keywords we need to hack-around */
-        $hasSpecialExitAsFunctionHandling = str_ends_with($stubFile, 'zend_builtin_functions.stub.php');
+        $hasSpecialExitAsFunctionHandling = basename($stubFile) == 'zend_builtin_functions.stub.php';
         if (!$fileInfo = $context->parsedFiles[$stubFile] ?? null) {
             initPhpParser();
             $stubContent = $stubCode ?? file_get_contents($stubFile);
@@ -3282,18 +3282,13 @@ class ClassInfo {
 
         $code .= "{\n";
 
-        $flagCodes = generateVersionDependentFlagCode("%s", $this->getFlagsByPhpVersion(), $this->phpVersionIdMinimumCompatibility);
-        $flags = implode("", $flagCodes);
-
         $classMethods = ($this->funcInfos === []) ? 'NULL' : "class_{$escapedName}_methods";
         if ($this->type === "enum") {
             $name = addslashes((string) $this->name);
             $backingType = $this->enumBackingType
                 ? $this->enumBackingType->toTypeCode() : "IS_UNDEF";
             $code .= "\tzend_class_entry *class_entry = zend_register_internal_enum(\"$name\", $backingType, $classMethods);\n";
-            if ($flags !== "") {
-                $code .= "\tclass_entry->ce_flags |= $flags\n";
-            }
+            $code .= implode("", generateVersionDependentFlagCode("\tclass_entry->ce_flags = %s;\n", $this->getFlagsByPhpVersion(), $this->phpVersionIdMinimumCompatibility));
         } else {
             $code .= "\tzend_class_entry ce, *class_entry;\n\n";
             if (count($this->name->getParts()) > 1) {
@@ -3310,22 +3305,25 @@ class ClassInfo {
                     $code .= "#if (PHP_VERSION_ID >= " . PHP_84_VERSION_ID . ")\n";
                 }
 
-                $code .= "\tclass_entry = zend_register_internal_class_with_flags(&ce, " . (isset($this->extends[0]) ? "class_entry_" . str_replace("\\", "_", $this->extends[0]->toString()) : "NULL") . ", " . ($flags ?: 0) . ");\n";
+                $template = "\tclass_entry = zend_register_internal_class_with_flags(&ce, " . (isset($this->extends[0]) ? "class_entry_" . str_replace("\\", "_", $this->extends[0]->toString()) : "NULL") . ", %s);\n";
+                $entries = generateVersionDependentFlagCode($template, $this->getFlagsByPhpVersion(), $this->phpVersionIdMinimumCompatibility ? max($this->phpVersionIdMinimumCompatibility, PHP_84_VERSION_ID) : null);
+                if ($entries !== []) {
+                    $code .= implode("", $entries);
+                } else {
+                    $code .= sprintf($template, "0");
+                }
 
                 if (!$php84MinimumCompatibility) {
                     $code .= "#else\n";
 
                     $code .= "\tclass_entry = zend_register_internal_class_ex(&ce, " . (isset($this->extends[0]) ? "class_entry_" . str_replace("\\", "_", $this->extends[0]->toString()) : "NULL") . ");\n";
-                    if ($flags !== "") {
-                        $code .= "\tclass_entry->ce_flags |= $flags;\n";
-                    }
+                    $code .= implode("", generateVersionDependentFlagCode("\tclass_entry->ce_flags |= %s;\n", $this->getFlagsByPhpVersion(), $this->phpVersionIdMinimumCompatibility));
                     $code .= "#endif\n";
                 }
             } else {
                 $code .= "\tclass_entry = zend_register_internal_interface(&ce);\n";
-                if ($flags !== "") {
-                    $code .= "\tclass_entry->ce_flags |= $flags\n";
-                }
+                $code .= implode("", generateVersionDependentFlagCode("\tclass_entry->ce_flags |= %s;\n", $this->getFlagsByPhpVersion(), $this->phpVersionIdMinimumCompatibility));
+
             }
         }
 
@@ -4089,7 +4087,7 @@ class DocCommentTag {
         $matches = [];
 
         if ($this->name === "param") {
-            preg_match('/^\s*([\w\|\\\\\[\]<>, ]+)\s*(?:[{(]|\$\w+).*$/', $value, $matches);
+            preg_match('/^\s*([\w\|\\\\\[\]<>, ]+)\s*(?:[{(]|(\.\.\.)?\$\w+).*$/', $value, $matches);
         } elseif ($this->name === "return" || $this->name === "var") {
             preg_match('/^\s*([\w\|\\\\\[\]<>, ]+)/', $value, $matches);
         }
@@ -4111,7 +4109,7 @@ class DocCommentTag {
 
         if ($this->name === "param") {
             // Allow for parsing extended types like callable(string):mixed in docblocks
-            preg_match('/^\s*(?<type>[\w\|\\\\]+(?<parens>\((?<inparens>(?:(?&parens)|[^(){}[\]]*+))++\)|\{(?&inparens)\}|\[(?&inparens)\])*+(?::(?&type))?)\s*\$(?<name>\w+).*$/', $value, $matches);
+            preg_match('/^\s*(?<type>[\w\|\\\\]+(?<parens>\((?<inparens>(?:(?&parens)|[^(){}[\]]*+))++\)|\{(?&inparens)\}|\[(?&inparens)\])*+(?::(?&type))?)\s*(\.\.\.)?\$(?<name>\w+).*$/', $value, $matches);
         } elseif ($this->name === "prefer-ref") {
             preg_match('/^\s*\$(?<name>\w+).*$/', $value, $matches);
         }
@@ -5972,9 +5970,10 @@ function installPhpParser(string $version, string $phpParserDir) {
         chdir(__DIR__);
 
         $tarName = "v$version.tar.gz";
-        passthru("wget https://github.com/nikic/PHP-Parser/archive/$tarName", $exit);
+        $downloadUrl = "https://github.com/nikic/PHP-Parser/archive/$tarName";
+        passthru("wget -O $tarName $downloadUrl", $exit);
         if ($exit !== 0) {
-            passthru("curl -LO https://github.com/nikic/PHP-Parser/archive/$tarName", $exit);
+            passthru("curl -LO $downloadUrl", $exit);
         }
         if ($exit !== 0) {
             throw new Exception("Failed to download PHP-Parser tarball");
@@ -5984,6 +5983,7 @@ function installPhpParser(string $version, string $phpParserDir) {
         }
         passthru("tar xvzf $tarName -C PHP-Parser-$version --strip-components 1", $exit);
         if ($exit !== 0) {
+            rmdir($phpParserDir);
             throw new Exception("Failed to extract PHP-Parser tarball");
         }
         unlink(__DIR__ . "/$tarName");

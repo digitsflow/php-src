@@ -10,7 +10,7 @@
    | obtain it through the world-wide-web, please send a note to          |
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
-   | Authors: Niels Dossche <nielsdos@php.net>                            |
+   | Authors: Nora Dossche  <ndossche@php.net>                            |
    +----------------------------------------------------------------------+
 */
 
@@ -121,6 +121,7 @@ static lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert(
 	php_dom_libxml_ns_mapper *ns_mapper = php_dom_ns_mapper_from_private(private_data);
     xmlNsPtr html_ns = php_dom_libxml_ns_mapper_ensure_html_ns(ns_mapper);
     xmlNsPtr xlink_ns = NULL;
+    xmlNsPtr xml_ns = NULL;
     xmlNsPtr prefixed_xmlns_ns = NULL;
 
     lexbor_array_obj_t work_list;
@@ -143,7 +144,9 @@ static lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert(
              * If a prefix:name format is used, then the local name will be "prefix:name" and the prefix will be empty.
              * There is however still somewhat of a concept of namespaces. There are three: HTML (the default), SVG, and MATHML. */
             lxb_dom_element_t *element = lxb_dom_interface_element(node);
-            const lxb_char_t *name = lxb_dom_element_local_name(element, NULL);
+            const lxb_char_t *name = lxb_dom_element_qualified_name(element, NULL);
+            ZEND_ASSERT(!element->node.prefix);
+
             xmlNodePtr lxml_element = xmlNewDocNode(lxml_doc, NULL, name, NULL);
             if (UNEXPECTED(lxml_element == NULL)) {
                 retval = LEXBOR_LIBXML2_BRIDGE_STATUS_OOM;
@@ -211,7 +214,13 @@ static lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert(
             for (lxb_dom_attr_t *attr = element->first_attr; attr != NULL; attr = attr->next) {
                 /* Same namespace remark as for elements */
                 size_t local_name_length, value_length;
-                const lxb_char_t *local_name = lxb_dom_attr_local_name(attr, &local_name_length);
+                const lxb_char_t *local_name = lxb_dom_attr_qualified_name(attr, &local_name_length);
+                if (attr->node.prefix) {
+                    const char *pos = strchr((const char *) local_name, ':');
+                    if (EXPECTED(pos)) {
+                        local_name = (const lxb_char_t *) pos + 1;
+                    }
+                }
                 const lxb_char_t *value = lxb_dom_attr_value(attr, &value_length);
 
                 if (UNEXPECTED(local_name_length >= INT_MAX || value_length >= INT_MAX)) {
@@ -240,7 +249,7 @@ static lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert(
                 lxml_attr->children = lxml_attr->last = lxml_text;
                 lxml_text->parent = (xmlNodePtr) lxml_attr;
 
-                if (attr->node.ns == LXB_NS_XMLNS) {
+                if (attr->node.ns == LXB_NS_XMLNS && (attr->node.prefix || strcmp((const char *) local_name, "xmlns") == 0)) {
                     if (strcmp((const char *) local_name, "xmlns") != 0) {
                         if (prefixed_xmlns_ns == NULL) {
                             prefixed_xmlns_ns = php_dom_libxml_ns_mapper_get_ns_raw_strings_nullsafe(ns_mapper, "xmlns", DOM_XMLNS_NS_URI);
@@ -250,12 +259,18 @@ static lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert(
                         lxml_attr->ns = php_dom_libxml_ns_mapper_ensure_prefixless_xmlns_ns(ns_mapper);
                     }
                     lxml_attr->ns->_private = (void *) php_dom_ns_is_xmlns_magic_token;
-                } else if (attr->node.ns == LXB_NS_XLINK) {
+                } else if (attr->node.prefix && attr->node.ns == LXB_NS_XLINK) {
                     if (xlink_ns == NULL) {
                         xlink_ns = php_dom_libxml_ns_mapper_get_ns_raw_strings_nullsafe(ns_mapper, "xlink", DOM_XLINK_NS_URI);
                         xlink_ns->_private = (void *) php_dom_ns_is_xlink_magic_token;
                     }
                     lxml_attr->ns = xlink_ns;
+                } else if (attr->node.prefix && attr->node.ns == LXB_NS_XML) {
+                    if (xml_ns == NULL) {
+                        xml_ns = php_dom_libxml_ns_mapper_get_ns_raw_strings_nullsafe(ns_mapper, "xml", DOM_XML_NS_URI);
+                        xml_ns->_private = (void *) php_dom_ns_is_xml_magic_token;
+                    }
+                    lxml_attr->ns = xml_ns;
                 }
 
                 if (last_added_attr == NULL) {
@@ -267,7 +282,7 @@ static lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert(
                 last_added_attr = lxml_attr;
 
                 /* xmlIsID does some other stuff too that is irrelevant here. */
-                if (local_name_length == 2 && local_name[0] == 'i' && local_name[1] == 'd' && attr->node.ns == LXB_NS_HTML) {
+                if (local_name_length == 2 && local_name[0] == 'i' && local_name[1] == 'd' && lxml_attr->ns == NULL) {
                     if (in_template || xmlAddID(NULL, lxml_doc, value, lxml_attr) == 0) {
                         /* If the ID already exists, the ID attribute still needs to be marked as an ID. */
                         lxml_attr->atype = XML_ATTRIBUTE_ID;

@@ -339,7 +339,7 @@ const mbfl_encoding *mbfl_name2encoding_ex(const char *name, size_t name_len)
 			int8_t offset = mbfl_encoding_ptr_list_after_hashing[key];
 			if (offset >= 0) {
 				encoding = mbfl_encoding_ptr_list + offset;
-				if (strncasecmp((*encoding)->name, name, name_len) == 0) {
+				if (strlen((*encoding)->name) == name_len && strncasecmp((*encoding)->name, name, name_len) == 0) {
 					return *encoding;
 				}
 			}
@@ -349,7 +349,8 @@ const mbfl_encoding *mbfl_name2encoding_ex(const char *name, size_t name_len)
 	/* search MIME charset name */
 	for (encoding = mbfl_encoding_ptr_list; *encoding; encoding++) {
 		if ((*encoding)->mime_name) {
-			if (strncasecmp((*encoding)->mime_name, name, name_len) == 0 && (*encoding)->mime_name[name_len] == '\0') {
+			size_t mime_len = strlen((*encoding)->mime_name);
+			if (mime_len == name_len && strncasecmp((*encoding)->mime_name, name, name_len) == 0) {
 				return *encoding;
 			}
 		}
@@ -359,7 +360,8 @@ const mbfl_encoding *mbfl_name2encoding_ex(const char *name, size_t name_len)
 	for (encoding = mbfl_encoding_ptr_list; *encoding; encoding++) {
 		if ((*encoding)->aliases) {
 			for (const char **alias = (*encoding)->aliases; *alias; alias++) {
-				if (strncasecmp(name, *alias, name_len) == 0 && (*alias)[name_len] == '\0') {
+				size_t alias_len = strlen(*alias);
+				if (alias_len == name_len && strncasecmp(name, *alias, name_len) == 0) {
 					return *encoding;
 				}
 			}

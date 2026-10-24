@@ -642,7 +642,10 @@ static zend_string* php_converter_do_convert(UConverter *dest_cnv,
 		THROW_UFAILURE(objval, "ucnv_toUChars", error);
 		return NULL;
 	}
-	temp = safe_emalloc(sizeof(UChar), temp_len, sizeof(UChar));
+	temp = safe_femalloc(sizeof(UChar), temp_len, sizeof(UChar), /* fallible */ true);
+	if (!temp) {
+		return NULL;
+	}
 
 	/* Convert to intermediate UChar* array */
 	error = U_ZERO_ERROR;
@@ -662,7 +665,11 @@ static zend_string* php_converter_do_convert(UConverter *dest_cnv,
 		return NULL;
 	}
 
-	ret = zend_string_alloc(ret_len, 0);
+	ret = zend_string_falloc(ret_len, /* persistent */ false, /* fallible */ true);
+	if (!ret) {
+		efree(temp);
+		return NULL;
+	}
 
 	/* Convert to final encoding */
 	error = U_ZERO_ERROR;
@@ -754,13 +761,13 @@ PHP_METHOD(UConverter, transcode) {
 			zval *tmpzval;
 
 			if (U_SUCCESS(error) &&
-				(tmpzval = zend_hash_str_find(Z_ARRVAL_P(options), "from_subst", sizeof("from_subst") - 1)) != NULL &&
+				(tmpzval = zend_hash_str_find_deref(Z_ARRVAL_P(options), "from_subst", sizeof("from_subst") - 1)) != NULL &&
 				Z_TYPE_P(tmpzval) == IS_STRING) {
 				error = U_ZERO_ERROR;
 				ucnv_setSubstChars(src_cnv, Z_STRVAL_P(tmpzval), Z_STRLEN_P(tmpzval) & 0x7F, &error);
 			}
 			if (U_SUCCESS(error) &&
-				(tmpzval = zend_hash_str_find(Z_ARRVAL_P(options), "to_subst", sizeof("to_subst") - 1)) != NULL &&
+				(tmpzval = zend_hash_str_find_deref(Z_ARRVAL_P(options), "to_subst", sizeof("to_subst") - 1)) != NULL &&
 				Z_TYPE_P(tmpzval) == IS_STRING) {
 				error = U_ZERO_ERROR;
 				ucnv_setSubstChars(dest_cnv, Z_STRVAL_P(tmpzval), Z_STRLEN_P(tmpzval) & 0x7F, &error);

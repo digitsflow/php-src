@@ -56,6 +56,8 @@
 
 #ifdef HAVE_JIT
 # include "jit/zend_jit.h"
+# include "Optimizer/zend_func_info.h"
+# include "Optimizer/zend_call_graph.h"
 #endif
 
 #ifndef ZEND_WIN32
@@ -193,10 +195,10 @@ static time_t zend_accel_get_time(void)
 # define zend_accel_get_time() time(NULL)
 #endif
 
-static inline bool is_cacheable_stream_path(const char *filename)
+static inline bool is_cacheable_stream_path(const zend_string *filename)
 {
-	return memcmp(filename, "file://", sizeof("file://") - 1) == 0 ||
-	       memcmp(filename, "phar://", sizeof("phar://") - 1) == 0;
+	return zend_string_starts_with_literal(filename, "file://") ||
+	       zend_string_starts_with_literal(filename, "phar://");
 }
 
 /* O+ overrides PHP chdir() function and remembers the current working directory
@@ -576,6 +578,13 @@ static zend_string* ZEND_FASTCALL accel_new_interned_string_for_php(zend_string 
 			return ret;
 		}
 	}
+#if ZEND_RC_DEBUG
+	/* PHP shouldn't create persistent strings during request, but at least
+	 * dl() may do this. They belong to the temporary module and are not shared. */
+	if (!zend_rc_debug && !ZSTR_IS_INTERNED(str) && (GC_FLAGS(str) & GC_PERSISTENT)) {
+		GC_MAKE_PERSISTENT_LOCAL(str);
+	}
+#endif
 	return str;
 }
 
@@ -600,19 +609,34 @@ static zend_always_inline zend_string *accel_find_interned_string_ex(zend_ulong 
 
 static zend_string* ZEND_FASTCALL accel_init_interned_string_for_php(const char *str, size_t size, bool permanent)
 {
+	zend_string *ret;
+
 	if (ZCG(counted)) {
 	    zend_ulong h = zend_inline_hash_func(str, size);
-		zend_string *ret = accel_find_interned_string_ex(h, str, size);
+		ret = accel_find_interned_string_ex(h, str, size);
 
-		if (!ret) {
-			ret = zend_string_init(str, size, permanent);
-			ZSTR_H(ret) = h;
+		if (ret) {
+			return ret;
 		}
 
-		return ret;
+		ret = zend_string_finit(str, size, permanent, CG(interned_strings_fallible));
+		if (UNEXPECTED(!ret)) {
+			return NULL;
+		}
+		ZSTR_H(ret) = h;
+	} else {
+		ret = zend_string_finit(str, size, permanent, CG(interned_strings_fallible));
 	}
 
-	return zend_string_init(str, size, permanent);
+#if ZEND_RC_DEBUG
+	/* PHP shouldn't create persistent strings during request, but at least
+	 * dl() may do this. They belong to the temporary module and are not shared. */
+	if (!zend_rc_debug && permanent) {
+		GC_MAKE_PERSISTENT_LOCAL(ret);
+	}
+#endif
+
+	return ret;
 }
 
 static inline void accel_copy_permanent_list_types(
@@ -1203,7 +1227,7 @@ zend_string *accel_make_persistent_key(zend_string *str)
 	if (IS_ABSOLUTE_PATH(path, path_length)) {
 		/* pass */
 	} else if (UNEXPECTED(php_is_stream_path(path))) {
-		if (!is_cacheable_stream_path(path)) {
+		if (!is_cacheable_stream_path(str)) {
 			return NULL;
 		}
 		/* pass */
@@ -1901,7 +1925,7 @@ static zend_op_array *file_cache_compile_file(zend_file_handle *file_handle, int
 	bool from_memory; /* if the script we've got is stored in SHM */
 
 	if (php_is_stream_path(ZSTR_VAL(file_handle->filename)) &&
-	    !is_cacheable_stream_path(ZSTR_VAL(file_handle->filename))) {
+	    !is_cacheable_stream_path(file_handle->filename)) {
 		return accelerator_orig_compile_file(file_handle, type);
 	}
 
@@ -2045,7 +2069,7 @@ zend_op_array *persistent_compile_file(zend_file_handle *file_handle, int type)
 				return accelerator_orig_compile_file(file_handle, type);
 			}
 			persistent_script = zend_accel_hash_find(&ZCSG(hash), key);
-		} else if (UNEXPECTED(php_is_stream_path(ZSTR_VAL(file_handle->filename)) && !is_cacheable_stream_path(ZSTR_VAL(file_handle->filename)))) {
+		} else if (UNEXPECTED(php_is_stream_path(ZSTR_VAL(file_handle->filename)) && !is_cacheable_stream_path(file_handle->filename))) {
 			ZCG(cache_opline) = NULL;
 			ZCG(cache_persistent_script) = NULL;
 			return accelerator_orig_compile_file(file_handle, type);
@@ -2300,6 +2324,10 @@ static zend_class_entry* zend_accel_inheritance_cache_get(zend_class_entry *ce, 
 	bool needs_autoload;
 	zend_inheritance_cache_entry *entry = ce->inheritance_cache;
 
+	if (entry) {
+		ZEND_ATOMIC_FENCE_ACQUIRE();
+	}
+
 	while (entry) {
 		entry = zend_accel_inheritance_cache_find(entry, ce, parent, traits_and_interfaces, &needs_autoload);
 		if (entry) {
@@ -2403,6 +2431,7 @@ static zend_class_entry* zend_accel_inheritance_cache_add(zend_class_entry *ce, 
 	}
 
 	zend_map_ptr_extend(ZCSG(map_ptr_last));
+	zend_accel_pending_ce_cache_begin();
 
 #if ZEND_MM_NEED_EIGHT_BYTE_REALIGNMENT
 	/* Align to 8-byte boundary */
@@ -2456,12 +2485,15 @@ static zend_class_entry* zend_accel_inheritance_cache_add(zend_class_entry *ce, 
 	entry->num_warnings = EG(num_errors);
 	entry->warnings = zend_persist_warnings(EG(num_errors), EG(errors));
 	entry->next = proto->inheritance_cache;
-	proto->inheritance_cache = entry;
 
 	EG(num_errors) = 0;
 	EG(errors) = NULL;
 
 	ZCSG(map_ptr_last) = CG(map_ptr_last);
+	ZEND_ATOMIC_FENCE_RELEASE();
+	proto->inheritance_cache = entry;
+
+	zend_accel_pending_ce_cache_commit();
 
 	zend_shared_alloc_destroy_xlat_table();
 
@@ -2713,7 +2745,7 @@ ZEND_RINIT_FUNCTION(zend_accelerator)
 				zend_reset_cache_vars();
 				zend_accel_hash_clean(&ZCSG(hash));
 
-				if (ZCG(accel_directives).interned_strings_buffer) {
+				if (ZCSG(interned_strings).saved_top) {
 					accel_interned_strings_restore_state();
 				}
 
@@ -2782,6 +2814,9 @@ zend_result accel_post_deactivate(void)
 		zend_string_release_ex(ZCG(cwd), 0);
 		ZCG(cwd) = NULL;
 	}
+
+	/* A persist window left through a bailout never published its slots */
+	zend_accel_pending_ce_cache_discard();
 
 	if (!ZCG(enabled) || !accel_startup_ok) {
 		return SUCCESS;
@@ -2964,9 +2999,7 @@ static void accel_globals_ctor(zend_accel_globals *accel_globals)
 
 static void accel_globals_dtor(zend_accel_globals *accel_globals)
 {
-#ifdef ZTS
 	zend_string_free(accel_globals->key);
-#endif
 	if (accel_globals->preloaded_internal_run_time_cache) {
 		pefree(accel_globals->preloaded_internal_run_time_cache, 1);
 	}
@@ -3444,6 +3477,8 @@ void accel_shutdown(void)
 	if ((ini_entry = zend_hash_str_find_ptr(EG(ini_directives), "include_path", sizeof("include_path")-1)) != NULL) {
 		ini_entry->on_modify = orig_include_path_on_modify;
 	}
+
+	accel_startup_ok = false;
 }
 
 void zend_accel_schedule_restart(zend_accel_restart_reason reason)
@@ -3558,7 +3593,7 @@ static void preload_shutdown(void)
 	if (EG(class_table)) {
 		ZEND_HASH_MAP_REVERSE_FOREACH_VAL(EG(class_table), zv) {
 			zend_class_entry *ce = Z_PTR_P(zv);
-			if (ce->type == ZEND_INTERNAL_CLASS) {
+			if (ce->type == ZEND_INTERNAL_CLASS && Z_TYPE_P(zv) != IS_ALIAS_PTR) {
 				break;
 			}
 		} ZEND_HASH_MAP_FOREACH_END_DEL();
@@ -3646,7 +3681,15 @@ static void preload_move_user_classes(HashTable *src, HashTable *dst)
 	zend_hash_extend(dst, dst->nNumUsed + src->nNumUsed, 0);
 	ZEND_HASH_MAP_FOREACH_BUCKET_FROM(src, p, EG(persistent_classes_count)) {
 		zend_class_entry *ce = Z_PTR(p->val);
-		ZEND_ASSERT(ce->type == ZEND_USER_CLASS);
+
+		/* Possible with internal class aliases */
+		if (ce->type == ZEND_INTERNAL_CLASS) {
+			ZEND_ASSERT(Z_TYPE(p->val) == IS_ALIAS_PTR);
+			_zend_hash_append(dst, p->key, &p->val);
+			zend_hash_del_bucket(src, p);
+			continue;
+		}
+
 		if (ce->info.user.filename != filename) {
 			filename = ce->info.user.filename;
 			if (filename) {
@@ -3800,6 +3843,11 @@ static bool preload_try_resolve_constants(zend_class_entry *ce)
 		ZEND_HASH_MAP_FOREACH_STR_KEY_PTR(&ce->constants_table, key, c) {
 			val = &c->value;
 			if (Z_TYPE_P(val) == IS_CONSTANT_AST) {
+				/* For deprecated constants, we need to flag the zval for recursion
+				 * detection. Make sure the zval is separated out of shm. */
+				if (ZEND_CLASS_CONST_FLAGS(c) & ZEND_ACC_DEPRECATED) {
+					ok = false;
+				}
 				if (EXPECTED(zend_update_class_constant(c, key, c->ce) == SUCCESS)) {
 					was_changed = changed = true;
 				} else {
@@ -3815,9 +3863,13 @@ static bool preload_try_resolve_constants(zend_class_entry *ce)
 			bool resolved = true;
 
 			for (i = 0; i < ce->default_properties_count; i++) {
-				val = &ce->default_properties_table[i];
+				zend_property_info *prop = ce->properties_info_table[i];
+				if (!prop) {
+					continue;
+				}
+
+				val = &ce->default_properties_table[OBJ_PROP_TO_NUM(prop->offset)];
 				if (Z_TYPE_P(val) == IS_CONSTANT_AST) {
-					zend_property_info *prop = ce->properties_info_table[i];
 					if (UNEXPECTED(zval_update_constant_ex(val, prop->ce) != SUCCESS)) {
 						resolved = ok = false;
 					}
@@ -3940,7 +3992,12 @@ static void preload_link(void)
 
 		ZEND_HASH_MAP_FOREACH_STR_KEY_VAL_FROM(EG(class_table), key, zv, EG(persistent_classes_count)) {
 			ce = Z_PTR_P(zv);
-			ZEND_ASSERT(ce->type != ZEND_INTERNAL_CLASS);
+
+			/* Possible with internal class aliases */
+			if (ce->type == ZEND_INTERNAL_CLASS) {
+				ZEND_ASSERT(Z_TYPE_P(zv) == IS_ALIAS_PTR);
+				continue;
+			}
 
 			if (!(ce->ce_flags & (ZEND_ACC_TOP_LEVEL|ZEND_ACC_ANON_CLASS))
 					|| (ce->ce_flags & ZEND_ACC_LINKED)) {
@@ -4026,9 +4083,15 @@ static void preload_link(void)
 
 		ZEND_HASH_MAP_REVERSE_FOREACH_VAL(EG(class_table), zv) {
 			ce = Z_PTR_P(zv);
+
+			/* Possible with internal class aliases */
 			if (ce->type == ZEND_INTERNAL_CLASS) {
-				break;
+				if (Z_TYPE_P(zv) != IS_ALIAS_PTR) {
+					break; /* can stop already */
+				}
+				continue;
 			}
+
 			if ((ce->ce_flags & ZEND_ACC_LINKED) && !(ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED)) {
 				if (!(ce->ce_flags & ZEND_ACC_TRAIT)) { /* don't update traits */
 					CG(in_compilation) = true; /* prevent autoloading */
@@ -4045,7 +4108,13 @@ static void preload_link(void)
 	ZEND_HASH_MAP_FOREACH_STR_KEY_VAL_FROM(
 			EG(class_table), key, zv, EG(persistent_classes_count)) {
 		ce = Z_PTR_P(zv);
-		ZEND_ASSERT(ce->type != ZEND_INTERNAL_CLASS);
+
+		/* Possible with internal class aliases */
+		if (ce->type == ZEND_INTERNAL_CLASS) {
+			ZEND_ASSERT(Z_TYPE_P(zv) == IS_ALIAS_PTR);
+			continue;
+		}
+
 		if ((ce->ce_flags & (ZEND_ACC_TOP_LEVEL|ZEND_ACC_ANON_CLASS))
 				&& !(ce->ce_flags & ZEND_ACC_LINKED)) {
 			zend_string *lcname = zend_string_tolower(ce->name);
@@ -4098,6 +4167,24 @@ static void preload_link(void)
 				preload_remove_declares(op_array);
 			}
 		} ZEND_HASH_FOREACH_END();
+
+		if (ce->num_hooked_props > 0) {
+			zend_property_info *info;
+
+			ZEND_HASH_MAP_FOREACH_PTR(&ce->properties_info, info) {
+				if (info->hooks) {
+					for (uint32_t i = 0; i < ZEND_PROPERTY_HOOK_COUNT; i++) {
+						if (info->hooks[i]) {
+							op_array = &info->hooks[i]->op_array;
+							ZEND_ASSERT(op_array->type == ZEND_USER_FUNCTION);
+							if (!(op_array->fn_flags & ZEND_ACC_TRAIT_CLONE)) {
+								preload_remove_declares(op_array);
+							}
+						}
+					}
+				}
+			} ZEND_HASH_FOREACH_END();
+		}
 	} ZEND_HASH_FOREACH_END();
 }
 
@@ -4198,12 +4285,54 @@ static void preload_remove_empty_includes(void)
 
 static void preload_register_trait_methods(zend_class_entry *ce) {
 	zend_op_array *op_array;
+	zend_property_info *info;
+
 	ZEND_HASH_MAP_FOREACH_PTR(&ce->function_table, op_array) {
 		if (!(op_array->fn_flags & ZEND_ACC_TRAIT_CLONE)) {
 			ZEND_ASSERT(op_array->refcount && "Must have refcount pointer");
 			zend_shared_alloc_register_xlat_entry(op_array->refcount, op_array);
 		}
 	} ZEND_HASH_FOREACH_END();
+
+	if (ce->num_hooked_props > 0) {
+		ZEND_HASH_MAP_FOREACH_PTR(&ce->properties_info, info) {
+			if (info->hooks) {
+				for (uint32_t i = 0; i < ZEND_PROPERTY_HOOK_COUNT; i++) {
+					if (info->hooks[i]) {
+						op_array = &info->hooks[i]->op_array;
+						if (!(op_array->fn_flags & ZEND_ACC_TRAIT_CLONE)) {
+							ZEND_ASSERT(op_array->refcount && "Must have refcount pointer");
+							zend_shared_alloc_register_xlat_entry(op_array->refcount, op_array);
+						}
+					}
+				}
+			}
+		} ZEND_HASH_FOREACH_END();
+	}
+}
+
+static void preload_fix_trait_op_array(zend_op_array *op_array)
+{
+	if (!(op_array->fn_flags & ZEND_ACC_TRAIT_CLONE)) {
+		return;
+	}
+
+	zend_op_array *orig_op_array = zend_shared_alloc_get_xlat_entry(op_array->refcount);
+	ZEND_ASSERT(orig_op_array && "Must be in xlat table");
+
+	zend_string *function_name = op_array->function_name;
+	zend_class_entry *scope = op_array->scope;
+	uint32_t fn_flags = op_array->fn_flags;
+	zend_function *prototype = op_array->prototype;
+	HashTable *ht = op_array->static_variables;
+	const zend_property_info *prop_info = op_array->prop_info;
+	*op_array = *orig_op_array;
+	op_array->function_name = function_name;
+	op_array->scope = scope;
+	op_array->fn_flags = fn_flags;
+	op_array->prototype = prototype;
+	op_array->static_variables = ht;
+	op_array->prop_info = prop_info;
 }
 
 static void preload_fix_trait_methods(zend_class_entry *ce)
@@ -4211,23 +4340,22 @@ static void preload_fix_trait_methods(zend_class_entry *ce)
 	zend_op_array *op_array;
 
 	ZEND_HASH_MAP_FOREACH_PTR(&ce->function_table, op_array) {
-		if (op_array->fn_flags & ZEND_ACC_TRAIT_CLONE) {
-			zend_op_array *orig_op_array = zend_shared_alloc_get_xlat_entry(op_array->refcount);
-			ZEND_ASSERT(orig_op_array && "Must be in xlat table");
-
-			zend_string *function_name = op_array->function_name;
-			zend_class_entry *scope = op_array->scope;
-			uint32_t fn_flags = op_array->fn_flags;
-			zend_function *prototype = op_array->prototype;
-			HashTable *ht = op_array->static_variables;
-			*op_array = *orig_op_array;
-			op_array->function_name = function_name;
-			op_array->scope = scope;
-			op_array->fn_flags = fn_flags;
-			op_array->prototype = prototype;
-			op_array->static_variables = ht;
-		}
+		preload_fix_trait_op_array(op_array);
 	} ZEND_HASH_FOREACH_END();
+
+	if (ce->num_hooked_props > 0) {
+		zend_property_info *info;
+		ZEND_HASH_MAP_FOREACH_PTR(&ce->properties_info, info) {
+			if (info->hooks) {
+				for (uint32_t i = 0; i < ZEND_PROPERTY_HOOK_COUNT; i++) {
+					if (info->hooks[i]) {
+						op_array = &info->hooks[i]->op_array;
+						preload_fix_trait_op_array(op_array);
+					}
+				}
+			}
+		} ZEND_HASH_FOREACH_END();
+	}
 }
 
 static void preload_optimize(zend_persistent_script *script)
@@ -4352,16 +4480,6 @@ static void preload_load(size_t orig_map_ptr_static_last)
 		}
 	}
 
-	if (EG(zend_constants)) {
-		EG(persistent_constants_count) = EG(zend_constants)->nNumUsed;
-	}
-	if (EG(function_table)) {
-		EG(persistent_functions_count) = EG(function_table)->nNumUsed;
-	}
-	if (EG(class_table)) {
-		EG(persistent_classes_count)   = EG(class_table)->nNumUsed;
-	}
-
 	size_t old_map_ptr_last = CG(map_ptr_last);
 	if (zend_map_ptr_static_last != ZCSG(map_ptr_static_last) || old_map_ptr_last != ZCSG(map_ptr_last)) {
 		CG(map_ptr_last) = ZCSG(map_ptr_last);
@@ -4399,6 +4517,39 @@ static void preload_load(size_t orig_map_ptr_static_last)
 		}
 	}
 }
+
+#if HAVE_JIT
+static void zend_accel_clear_call_graph_ptrs(zend_op_array *op_array)
+{
+	ZEND_ASSERT(ZEND_USER_CODE(op_array->type));
+	zend_func_info *info = ZEND_FUNC_INFO(op_array);
+	if (info) {
+		info->caller_info = NULL;
+		info->callee_info = NULL;
+	}
+}
+
+static void accel_reset_arena_info(zend_persistent_script *script)
+{
+	zend_op_array *op_array;
+	zend_class_entry *ce;
+
+	zend_accel_clear_call_graph_ptrs(&script->script.main_op_array);
+	ZEND_HASH_MAP_FOREACH_PTR(&script->script.function_table, op_array) {
+		zend_accel_clear_call_graph_ptrs(op_array);
+	} ZEND_HASH_FOREACH_END();
+	ZEND_HASH_MAP_FOREACH_PTR(&script->script.class_table, ce) {
+		ZEND_HASH_MAP_FOREACH_PTR(&ce->function_table, op_array) {
+			if (op_array->scope == ce
+			 && op_array->type == ZEND_USER_FUNCTION
+			 && !(op_array->fn_flags & ZEND_ACC_ABSTRACT)
+			 && !(op_array->fn_flags & ZEND_ACC_TRAIT_CLONE)) {
+				zend_accel_clear_call_graph_ptrs(op_array);
+			}
+		} ZEND_HASH_FOREACH_END();
+	} ZEND_HASH_FOREACH_END();
+}
+#endif
 
 static zend_result accel_preload(const char *config, bool in_child)
 {
@@ -4598,6 +4749,12 @@ static zend_result accel_preload(const char *config, bool in_child)
 
 		preload_load(orig_map_ptr_static_last);
 
+		/* Update persistent counts, as shutdown will discard anything past
+		 * that, and these tables are aliases to global ones at this point. */
+		EG(persistent_functions_count) = EG(function_table)->nNumUsed;
+		EG(persistent_classes_count)   = EG(class_table)->nNumUsed;
+		EG(persistent_constants_count) = EG(zend_constants)->nNumUsed;
+
 		/* Store individual scripts with unlinked classes */
 		HANDLE_BLOCK_INTERRUPTIONS();
 		SHM_UNPROTECT();
@@ -4611,6 +4768,18 @@ static zend_result accel_preload(const char *config, bool in_child)
 			ZCSG(saved_scripts)[i++] = preload_script_in_shared_memory(script);
 		} ZEND_HASH_FOREACH_END();
 		ZCSG(saved_scripts)[i] = NULL;
+
+#if HAVE_JIT
+		/* During persisting, the JIT may trigger and fill in the call graph.
+		 * The call graph info is allocated on the arena which will be gone after preloading.
+		 * To prevent invalid accesses during normal requests, the arena data should be cleared.
+		 * This has to be done after all scripts have been persisted because shared op arrays between
+		 * scripts can change the call graph. */
+		accel_reset_arena_info(ZCSG(preload_script));
+		for (zend_persistent_script **scripts = ZCSG(saved_scripts); *scripts; scripts++) {
+			accel_reset_arena_info(*scripts);
+		}
+#endif
 
 		zend_shared_alloc_save_state();
 		accel_interned_strings_save_state();
@@ -4695,6 +4864,7 @@ static zend_result accel_finish_startup_preload(bool in_child)
 	EG(error_reporting) = 0;
 
 	const zend_result rc = php_request_startup();
+	zend_mm_set_max_allocs(0);
 
 	EG(error_reporting) = orig_error_reporting;
 
@@ -4733,6 +4903,11 @@ static zend_result accel_finish_startup_preload(bool in_child)
 		EG(class_table) = NULL;
 		EG(function_table) = NULL;
 		PG(report_memleaks) = orig_report_memleaks;
+#ifdef ZTS
+		/* Reset the virtual CWD state back to the original state created by virtual_cwd_startup().
+		 * This is necessary because the normal startup code assumes the CWD state is active. */
+		virtual_cwd_activate();
+#endif
 	} else {
 		zend_shared_alloc_unlock();
 		ret = FAILURE;

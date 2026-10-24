@@ -1316,7 +1316,7 @@ static int zend_jit(const zend_op_array *op_array, zend_ssa *ssa, const zend_op 
 	uint32_t target_label, target_label2;
 	uint32_t op1_info, op1_def_info, op2_info, res_info, res_use_info, op1_mem_info;
 	zend_jit_addr op1_addr, op1_def_addr, op2_addr, op2_def_addr, res_addr;
-	zend_class_entry *ce;
+	zend_class_entry *ce = NULL;
 	bool ce_is_instanceof;
 	bool on_this;
 
@@ -2332,14 +2332,10 @@ static int zend_jit(const zend_op_array *op_array, zend_ssa *ssa, const zend_op 
 							goto jit_failure;
 						}
 						goto done;
+					case ZEND_FETCH_OBJ_FUNC_ARG:
 					case ZEND_FETCH_OBJ_R:
 					case ZEND_FETCH_OBJ_IS:
 					case ZEND_FETCH_OBJ_W:
-						if (opline->op2_type != IS_CONST
-						 || Z_TYPE_P(RT_CONSTANT(opline, opline->op2)) != IS_STRING
-						 || Z_STRVAL_P(RT_CONSTANT(opline, opline->op2))[0] == '\0') {
-							break;
-						}
 						ce = NULL;
 						ce_is_instanceof = 0;
 						on_this = 0;
@@ -2369,11 +2365,36 @@ static int zend_jit(const zend_op_array *op_array, zend_ssa *ssa, const zend_op 
 								}
 							}
 						}
-						if (!zend_jit_fetch_obj(&ctx, opline, op_array, ssa, ssa_op,
-								op1_info, op1_addr, 0, ce, ce_is_instanceof, on_this, 0, 0, NULL,
-								RES_REG_ADDR(), IS_UNKNOWN,
-								zend_may_throw(opline, ssa_op, op_array, ssa))) {
-							goto jit_failure;
+						if (opline->op2_type != IS_CONST
+						 || Z_TYPE_P(RT_CONSTANT(opline, opline->op2)) != IS_STRING
+						 || Z_STRVAL_P(RT_CONSTANT(opline, opline->op2))[0] == '\0') {
+							break;
+						}
+						if (opline->opcode == ZEND_FETCH_OBJ_FUNC_ARG) {
+							/* FETCH_OBJ_FUNC_ARG's by-value fetch dispatches into the
+							 * FETCH_OBJ_R handler, which may take the SIMPLE_GET hook fast
+							 * path and push a getter frame; by-ref dispatches into
+							 * FETCH_OBJ_W. The function JIT may keep values solely in
+							 * registers, so we must NOT exit to the VM (stale stack slots).
+							 * Inline the by-value path through zend_jit_fetch_obj, which runs
+							 * the hook getter inside a helper and keeps all registers live.
+							 * The by-ref path has no SIMPLE_GET fast path, so the generic
+							 * handler (a full C call, safe under register allocation) is used.
+							 * This mirrors the tracing JIT fix for GH-21006 (GH-21369); the
+							 * runtime by-ref check is required because the passing mode is
+							 * only known once the callee is resolved via namespace fallback.
+							 * See GH-22857. */
+							if (!zend_jit_fetch_obj_func_arg(jit, opline, op_array, ssa, ssa_op,
+									op1_info, op1_addr, ce, ce_is_instanceof, on_this, RES_REG_ADDR())) {
+								goto jit_failure;
+							}
+						} else {
+							if (!zend_jit_fetch_obj(&ctx, opline, op_array, ssa, ssa_op,
+									op1_info, op1_addr, 0, ce, ce_is_instanceof, on_this, 0, 0, NULL,
+									RES_REG_ADDR(), IS_UNKNOWN,
+									zend_may_throw(opline, ssa_op, op_array, ssa))) {
+								goto jit_failure;
+							}
 						}
 						goto done;
 					case ZEND_BIND_GLOBAL:
@@ -2548,21 +2569,29 @@ static int zend_jit(const zend_op_array *op_array, zend_ssa *ssa, const zend_op 
 						}
 						goto done;
 					case ZEND_FRAMELESS_ICALL_0:
-						jit_frameless_icall0(jit, opline);
+						if (!jit_frameless_icall0(jit, opline)) {
+							goto jit_failure;
+						}
 						goto done;
 					case ZEND_FRAMELESS_ICALL_1:
 						op1_info = OP1_INFO();
-						jit_frameless_icall1(jit, opline, op1_info);
+						if (!jit_frameless_icall1(jit, opline, op1_info)) {
+							goto jit_failure;
+						}
 						goto done;
 					case ZEND_FRAMELESS_ICALL_2:
 						op1_info = OP1_INFO();
 						op2_info = OP2_INFO();
-						jit_frameless_icall2(jit, opline, op1_info, op2_info);
+						if (!jit_frameless_icall2(jit, opline, op1_info, op2_info)) {
+							goto jit_failure;
+						}
 						goto done;
 					case ZEND_FRAMELESS_ICALL_3:
 						op1_info = OP1_INFO();
 						op2_info = OP2_INFO();
-						jit_frameless_icall3(jit, opline, op1_info, op2_info, OP1_DATA_INFO());
+						if (!jit_frameless_icall3(jit, opline, op1_info, op2_info, OP1_DATA_INFO())) {
+							goto jit_failure;
+						}
 						goto done;
 					default:
 						break;
@@ -2710,6 +2739,38 @@ static int zend_jit(const zend_op_array *op_array, zend_ssa *ssa, const zend_op 
 						call_level--;
 					}
 					break;
+				/* FETCH_OBJ_FUNC_ARG may dispatch into the FETCH_OBJ_R handler (if sent by value). */
+				case ZEND_FETCH_OBJ_FUNC_ARG:
+				case ZEND_FETCH_OBJ_R:
+					if (!zend_jit_handler(&ctx, opline,
+						zend_may_throw(opline, ssa_op, op_array, ssa))) {
+						goto jit_failure;
+					}
+
+					/* Cache slot is only used for IS_CONST op2, so only that can result in hook fast path. */
+					if (opline->op2_type == IS_CONST) {
+						if (JIT_G(opt_level) < ZEND_JIT_LEVEL_INLINE) {
+							if (opline->op1_type == IS_UNUSED) {
+								ce = op_array->scope;
+							} else {
+								ce = NULL;
+							}
+						}
+
+						if (!ce || !(ce->ce_flags & ZEND_ACC_FINAL) || ce->num_hooked_props > 0) {
+							/* If a simple hook is called, exit to the VM. */
+							ir_ref if_hook_enter = ir_IF(jit_CMP_IP(jit, IR_EQ, opline + 1));
+							ir_IF_FALSE(if_hook_enter);
+							if (GCC_GLOBAL_REGS) {
+								ir_TAILCALL(IR_VOID, ir_LOAD_A(jit_IP(jit)));
+							} else {
+								ir_RETURN(ir_CONST_I32(1)); /* ZEND_VM_ENTER */
+							}
+							ir_IF_TRUE(if_hook_enter);
+						}
+					}
+
+					break;
 				default:
 					if (!zend_jit_handler(&ctx, opline,
 							zend_may_throw(opline, ssa_op, op_array, ssa))) {
@@ -2718,7 +2779,7 @@ static int zend_jit(const zend_op_array *op_array, zend_ssa *ssa, const zend_op 
 					if (i == end
 					 && (opline->result_type & (IS_SMART_BRANCH_JMPZ|IS_SMART_BRANCH_JMPNZ)) != 0) {
 						/* smart branch split across basic blocks */
-						if (!zend_jit_set_cond(&ctx, opline + 2, opline->result.var)) {
+						if (!zend_jit_set_cond(&ctx, opline, opline + 2, opline->result.var)) {
 							goto jit_failure;
 						}
 					}
@@ -2915,8 +2976,9 @@ static int ZEND_FASTCALL zend_runtime_jit(void)
 	bool do_bailout = 0;
 
 	zend_shared_alloc_lock();
+	jit_extension = (zend_jit_op_array_extension*)ZEND_FUNC_INFO(op_array);
 
-	if (ZEND_FUNC_INFO(op_array)) {
+	if (jit_extension && !(jit_extension->func_info.flags & ZEND_FUNC_JITED)) {
 
 		SHM_UNPROTECT();
 		zend_jit_unprotect();
@@ -2928,11 +2990,12 @@ static int ZEND_FASTCALL zend_runtime_jit(void)
 					opline++;
 				}
 			}
-			jit_extension = (zend_jit_op_array_extension*)ZEND_FUNC_INFO(op_array);
-			opline->handler = jit_extension->orig_handler;
+			((zend_op*)opline)->handler = jit_extension->orig_handler;
 
 			/* perform real JIT for this function */
 			zend_real_jit_func(op_array, NULL, NULL, ZEND_JIT_ON_FIRST_EXEC);
+
+			jit_extension->func_info.flags |= ZEND_FUNC_JITED;
 		} zend_catch {
 			do_bailout = true;
 		} zend_end_try();
@@ -2994,7 +3057,7 @@ void ZEND_FASTCALL zend_jit_hot_func(zend_execute_data *execute_data, const zend
 	zend_shared_alloc_lock();
 	jit_extension = (zend_jit_op_array_hot_extension*)ZEND_FUNC_INFO(op_array);
 
-	if (jit_extension) {
+	if (jit_extension && !(jit_extension->func_info.flags & ZEND_FUNC_JITED)) {
 		SHM_UNPROTECT();
 		zend_jit_unprotect();
 
@@ -3003,8 +3066,14 @@ void ZEND_FASTCALL zend_jit_hot_func(zend_execute_data *execute_data, const zend
 				op_array->opcodes[i].handler = jit_extension->orig_handlers[i];
 			}
 
+#ifdef HAVE_GCC_GLOBAL_REGS
+			EX(opline) = opline;
+#endif
+
 			/* perform real JIT for this function */
 			zend_real_jit_func(op_array, NULL, opline, ZEND_JIT_ON_HOT_COUNTERS);
+
+			jit_extension->func_info.flags |= ZEND_FUNC_JITED;
 		} zend_catch {
 			do_bailout = 1;
 		} zend_end_try();
@@ -3182,6 +3251,17 @@ int zend_jit_op_array(zend_op_array *op_array, zend_script *script)
 	return FAILURE;
 }
 
+static void zend_jit_link_func_info(zend_op_array *op_array)
+{
+	if (!ZEND_FUNC_INFO(op_array)) {
+		void *jit_extension = zend_shared_alloc_get_xlat_entry(op_array->opcodes);
+
+		if (jit_extension) {
+			ZEND_SET_FUNC_INFO(op_array, jit_extension);
+		}
+	}
+}
+
 int zend_jit_script(zend_script *script)
 {
 	void *checkpoint;
@@ -3268,17 +3348,33 @@ int zend_jit_script(zend_script *script)
 	 || JIT_G(trigger) == ZEND_JIT_ON_HOT_TRACE) {
 		zend_class_entry *ce;
 		zend_op_array *op_array;
+		zval *zv;
+		zend_property_info *prop;
 
-		ZEND_HASH_MAP_FOREACH_PTR(&script->class_table, ce) {
+		ZEND_HASH_MAP_FOREACH_VAL(&script->class_table, zv) {
+			if (Z_TYPE_P(zv) == IS_ALIAS_PTR) {
+				continue;
+			}
+
+			ce = Z_PTR_P(zv);
+			ZEND_ASSERT(ce->type == ZEND_USER_CLASS);
+
 			ZEND_HASH_MAP_FOREACH_PTR(&ce->function_table, op_array) {
-				if (!ZEND_FUNC_INFO(op_array)) {
-					void *jit_extension = zend_shared_alloc_get_xlat_entry(op_array->opcodes);
-
-					if (jit_extension) {
-						ZEND_SET_FUNC_INFO(op_array, jit_extension);
-					}
-				}
+				zend_jit_link_func_info(op_array);
 			} ZEND_HASH_FOREACH_END();
+
+			if (ce->num_hooked_props > 0) {
+				ZEND_HASH_MAP_FOREACH_PTR(&ce->properties_info, prop) {
+					if (prop->hooks) {
+						for (uint32_t i = 0; i < ZEND_PROPERTY_HOOK_COUNT; i++) {
+							if (prop->hooks[i]) {
+								op_array = &prop->hooks[i]->op_array;
+								zend_jit_link_func_info(op_array);
+							}
+						}
+					}
+				} ZEND_HASH_FOREACH_END();
+			}
 		} ZEND_HASH_FOREACH_END();
 	}
 
@@ -3656,6 +3752,14 @@ void zend_jit_shutdown(void)
 #else
 	zend_jit_trace_free_caches(&jit_globals);
 #endif
+
+	/* Reset global pointers to prevent use-after-free in `zend_jit_status()`
+	 * after gracefully restarting Apache with mod_php, see:
+	 * https://github.com/php/php-src/pull/19212 */
+	dasm_ptr = NULL;
+	dasm_buf = NULL;
+	dasm_end = NULL;
+	dasm_size = 0;
 }
 
 static void zend_jit_reset_counters(void)
@@ -3767,6 +3871,24 @@ static void zend_jit_restart_preloaded_script(zend_persistent_script *script)
 				zend_jit_restart_preloaded_op_array(op_array);
 			}
 		} ZEND_HASH_FOREACH_END();
+
+		if (ce->num_hooked_props > 0) {
+			zend_property_info *prop;
+
+			ZEND_HASH_MAP_FOREACH_PTR(&ce->properties_info, prop) {
+				if (prop->hooks) {
+					for (uint32_t i = 0; i < ZEND_PROPERTY_HOOK_COUNT; i++) {
+						if (prop->hooks[i]) {
+							op_array = &prop->hooks[i]->op_array;
+							ZEND_ASSERT(op_array->type == ZEND_USER_FUNCTION);
+							if (!(op_array->fn_flags & ZEND_ACC_TRAIT_CLONE)) {
+								zend_jit_restart_preloaded_op_array(op_array);
+							}
+						}
+					}
+				}
+			} ZEND_HASH_FOREACH_END();
+		}
 	} ZEND_HASH_FOREACH_END();
 }
 

@@ -286,9 +286,7 @@ U_CFUNC PHP_FUNCTION(intltz_get_canonical_id)
 	RETVAL_NEW_STR(u8str);
 
 	if (is_systemid) { /* by-ref argument passed */
-		ZVAL_DEREF(is_systemid);
-		zval_ptr_dtor(is_systemid);
-		ZVAL_BOOL(is_systemid, isSystemID);
+		ZEND_TRY_ASSIGN_REF_BOOL(is_systemid, isSystemID);
 	}
 }
 
@@ -440,7 +438,7 @@ U_CFUNC PHP_FUNCTION(intltz_get_offset)
 	TIMEZONE_METHOD_INIT_VARS;
 
 	if (zend_parse_method_parameters(ZEND_NUM_ARGS(), getThis(),
-			"Odbz/z/", &object, TimeZone_ce_ptr, &date, &local, &rawOffsetArg,
+			"Odbzz", &object, TimeZone_ce_ptr, &date, &local, &rawOffsetArg,
 			&dstOffsetArg) == FAILURE) {
 		RETURN_THROWS();
 	}
@@ -452,10 +450,8 @@ U_CFUNC PHP_FUNCTION(intltz_get_offset)
 
 	INTL_METHOD_CHECK_STATUS(to, "error obtaining offset");
 
-	zval_ptr_dtor(rawOffsetArg);
-	ZVAL_LONG(rawOffsetArg, rawOffset);
-	zval_ptr_dtor(dstOffsetArg);
-	ZVAL_LONG(dstOffsetArg, dstOffset);
+	ZEND_TRY_ASSIGN_REF_LONG(rawOffsetArg, rawOffset);
+	ZEND_TRY_ASSIGN_REF_LONG(dstOffsetArg, dstOffset);
 
 	RETURN_TRUE;
 }
@@ -517,13 +513,15 @@ U_CFUNC PHP_FUNCTION(intltz_get_display_name)
 		RETURN_THROWS();
 	}
 
+	TIMEZONE_METHOD_FETCH_OBJECT;
+
 	bool found = false;
 	for (int i = 0; !found && i < sizeof(display_types)/sizeof(*display_types); i++) {
 		if (display_types[i] == display_type)
 			found = true;
 	}
 	if (!found) {
-		intl_error_set(NULL, U_ILLEGAL_ARGUMENT_ERROR,
+		intl_errors_set(TIMEZONE_ERROR_P(to), U_ILLEGAL_ARGUMENT_ERROR,
 			"wrong display type", 0);
 		RETURN_FALSE;
 	}
@@ -531,8 +529,6 @@ U_CFUNC PHP_FUNCTION(intltz_get_display_name)
 	if (!locale_str) {
 		locale_str = intl_locale_get_default();
 	}
-
-	TIMEZONE_METHOD_FETCH_OBJECT;
 
 	UnicodeString result;
 	to->utimezone->getDisplayName((UBool)daylight, (TimeZone::EDisplayType)display_type,

@@ -180,12 +180,6 @@ static PHP_MSHUTDOWN_FUNCTION(phpdbg) /* {{{ */
 		phpdbg_notice("Script ended normally");
 	}
 
-	/* hack to restore mm_heap->use_custom_heap in order to receive memory leak info */
-	if (use_mm_wrappers) {
-		/* ASSUMING that mm_heap->use_custom_heap is the first element of the struct ... */
-		*(int *) zend_mm_get_heap() = 0;
-	}
-
 	if (PHPDBG_G(buffer)) {
 		free(PHPDBG_G(buffer));
 		PHPDBG_G(buffer) = NULL;
@@ -498,7 +492,7 @@ PHP_FUNCTION(phpdbg_get_executable)
 	HashTable *files = &PHPDBG_G(file_sources);
 	HashTable files_tmp;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|H", &options) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|h", &options) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -592,7 +586,7 @@ PHP_FUNCTION(phpdbg_end_oplog)
 	bool by_function = false;
 	bool by_opcode = false;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|H", &options) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|h", &options) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -1452,7 +1446,7 @@ phpdbg_main:
 
 		if (php_request_startup() == FAILURE) {
 			PUTS("Could not startup");
-			return 1;
+			goto phpdbg_out;
 		}
 
 #ifndef _WIN32

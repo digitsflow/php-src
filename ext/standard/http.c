@@ -105,6 +105,15 @@ try_again:
 	}
 }
 
+static zend_always_inline bool php_url_check_stack_limit(void)
+{
+#ifdef ZEND_CHECK_STACK_LIMIT
+	return zend_call_stack_overflowed(EG(stack_limit));
+#else
+	return false;
+#endif
+}
+
 /* {{{ php_url_encode_hash */
 PHPAPI void php_url_encode_hash_ex(HashTable *ht, smart_str *formstr,
 				const char *num_prefix, size_t num_prefix_len,
@@ -120,6 +129,12 @@ PHPAPI void php_url_encode_hash_ex(HashTable *ht, smart_str *formstr,
 
 	if (GC_IS_RECURSIVE(ht)) {
 		/* Prevent recursion */
+		return;
+	}
+
+	/* Very deeply structured data could trigger a stack overflow, even without recursion. */
+	if (UNEXPECTED(php_url_check_stack_limit())) {
+		zend_throw_error(NULL, "Maximum call stack size reached.");
 		return;
 	}
 
@@ -246,7 +261,7 @@ PHP_FUNCTION(http_build_query)
 	ZEND_PARSE_PARAMETERS_END();
 
 	if (UNEXPECTED(Z_TYPE_P(formdata) == IS_OBJECT && (Z_OBJCE_P(formdata)->ce_flags & ZEND_ACC_ENUM))) {
-		zend_argument_type_error(1, "must be of type array, %s given", zend_zval_value_name(formdata));
+		zend_argument_type_error(1, "must not be an enum, %s given", zend_zval_value_name(formdata));
 		RETURN_THROWS();
 	}
 

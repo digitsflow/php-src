@@ -1,5 +1,5 @@
 --TEST--
-GH-17921 - overflow on socket_read/socket_recv buffer size
+GH-16267 - overflow on socket_strerror argument
 --EXTENSIONS--
 sockets
 --FILE--

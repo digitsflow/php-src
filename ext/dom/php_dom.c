@@ -101,6 +101,7 @@ static zend_object_handlers dom_modern_nodelist_object_handlers;
 static zend_object_handlers dom_html_collection_object_handlers;
 static zend_object_handlers dom_object_namespace_node_handlers;
 static zend_object_handlers dom_modern_domimplementation_object_handlers;
+static zend_object_handlers dom_modern_element_object_handlers;
 static zend_object_handlers dom_token_list_object_handlers;
 #ifdef LIBXML_XPATH_ENABLED
 zend_object_handlers dom_xpath_object_handlers;
@@ -145,7 +146,7 @@ static HashTable dom_xpath_prop_handlers;
 
 static zend_object *dom_objects_namespace_node_new(zend_class_entry *class_type);
 static void dom_object_namespace_node_free_storage(zend_object *object);
-static xmlNodePtr php_dom_create_fake_namespace_decl_node_ptr(xmlNodePtr nodep, xmlNsPtr original);
+static xmlNodePtr php_dom_create_fake_namespace_decl_node_ptr(xmlNodePtr nodep, xmlNsPtr original, xmlDocPtr fallback_doc);
 
 typedef zend_result (*dom_read_t)(dom_object *obj, zval *retval);
 typedef zend_result (*dom_write_t)(dom_object *obj, zval *newval);
@@ -362,6 +363,9 @@ static zval *dom_get_property_ptr_ptr(zend_object *object, zend_string *name, in
 		return zend_std_get_property_ptr_ptr(object, name, type, cache_slot);
 	}
 
+	if (cache_slot) {
+		cache_slot[0] = cache_slot[1] = cache_slot[2] = NULL;
+	}
 	return NULL;
 }
 
@@ -371,13 +375,14 @@ static zend_always_inline const dom_prop_handler *dom_get_prop_handler(const dom
 
 	if (obj->prop_handler != NULL) {
 		if (cache_slot && *cache_slot == obj->prop_handler) {
-			hnd = *(cache_slot + 1);
+			hnd = cache_slot[1];
 		}
 		if (!hnd) {
 			hnd = zend_hash_find_ptr(obj->prop_handler, name);
 			if (cache_slot) {
-				*cache_slot = obj->prop_handler;
-				*(cache_slot + 1) = (void *) hnd;
+				cache_slot[0] = obj->prop_handler;
+				cache_slot[1] = (void *) hnd;
+				cache_slot[2] = NULL;
 			}
 		}
 	}
@@ -487,6 +492,7 @@ static void dom_unset_property(zend_object *object, zend_string *member, void **
 	zend_std_unset_property(object, member, cache_slot);
 }
 
+/* This custom handler is necessary to avoid a recursive construction of the entire subtree. */
 static HashTable* dom_get_debug_info_helper(zend_object *object, int *is_temp) /* {{{ */
 {
 	dom_object			*obj = php_dom_obj_from_obj(object);
@@ -496,6 +502,11 @@ static HashTable* dom_get_debug_info_helper(zend_object *object, int *is_temp) /
 	zend_string			*string_key;
 	dom_prop_handler	*entry;
 	zend_string         *object_str;
+
+	/* As we have a custom implementation, we must manually check for overrides. */
+	if (object->ce->__debugInfo) {
+		return zend_std_get_debug_info(object, is_temp);
+	}
 
 	*is_temp = 1;
 
@@ -665,21 +676,39 @@ static zend_object *dom_objects_store_clone_obj(zend_object *zobject) /* {{{ */
 }
 /* }}} */
 
+static zend_object *dom_modern_element_clone_obj(zend_object *zobject)
+{
+	zend_object *clone = dom_objects_store_clone_obj(zobject);
+
+	/* The $classList property is unique per element, and cached due to its [[SameObject]] requirement.
+	 * Remove it from the clone so the clone will get a fresh instance upon demand. */
+	zval *class_list = dom_element_class_list_zval(php_dom_obj_from_obj(clone));
+	if (!Z_ISUNDEF_P(class_list)) {
+		zval_ptr_dtor(class_list);
+		ZVAL_UNDEF(class_list);
+	}
+
+	return clone;
+}
+
 static zend_object *dom_object_namespace_node_clone_obj(zend_object *zobject)
 {
 	dom_object_namespace_node *intern = php_dom_namespace_node_obj_from_obj(zobject);
 	zend_object *clone = dom_objects_namespace_node_new(intern->dom.std.ce);
 	dom_object_namespace_node *clone_intern = php_dom_namespace_node_obj_from_obj(clone);
 
-	xmlNodePtr original_node = dom_object_get_node(&intern->dom);
-	ZEND_ASSERT(original_node->type == XML_NAMESPACE_DECL);
-	xmlNodePtr cloned_node = php_dom_create_fake_namespace_decl_node_ptr(original_node->parent, original_node->ns);
-
 	if (intern->parent_intern) {
 		clone_intern->parent_intern = intern->parent_intern;
 		GC_ADDREF(&clone_intern->parent_intern->std);
 	}
-	dom_update_refcount_after_clone(&intern->dom, original_node, &clone_intern->dom, cloned_node);
+
+	xmlNodePtr original_node = dom_object_get_node(&intern->dom);
+	if (original_node != NULL) {
+		ZEND_ASSERT(original_node->type == XML_NAMESPACE_DECL);
+		xmlNodePtr parent = intern->parent_intern ? dom_object_get_node(intern->parent_intern) : NULL;
+		xmlNodePtr cloned_node = php_dom_create_fake_namespace_decl_node_ptr(parent, original_node->ns, original_node->doc);
+		dom_update_refcount_after_clone(&intern->dom, original_node, &clone_intern->dom, cloned_node);
+	}
 
 	zend_objects_clone_members(clone, &intern->dom.std);
 	return clone;
@@ -774,6 +803,9 @@ PHP_MINIT_FUNCTION(dom)
 	 * one instance per parent object. */
 	dom_modern_domimplementation_object_handlers.clone_obj = NULL;
 
+	memcpy(&dom_modern_element_object_handlers, &dom_object_handlers, sizeof(zend_object_handlers));
+	dom_modern_element_object_handlers.clone_obj = dom_modern_element_clone_obj;
+
 	memcpy(&dom_nnodemap_object_handlers, &dom_object_handlers, sizeof(zend_object_handlers));
 	dom_nnodemap_object_handlers.free_obj = dom_nnodemap_objects_free_storage;
 	dom_nnodemap_object_handlers.read_dimension = dom_nodemap_read_dimension;
@@ -861,12 +893,12 @@ PHP_MINIT_FUNCTION(dom)
 	zend_hash_init(&dom_modern_node_prop_handlers, 0, NULL, NULL, true);
 	DOM_REGISTER_PROP_HANDLER(&dom_modern_node_prop_handlers, "nodeType", dom_node_node_type_read, NULL);
 	DOM_REGISTER_PROP_HANDLER(&dom_modern_node_prop_handlers, "nodeName", dom_node_node_name_read, NULL);
-	DOM_REGISTER_PROP_HANDLER(&dom_modern_node_prop_handlers, "baseURI", dom_node_base_uri_read, NULL);
+	DOM_REGISTER_PROP_HANDLER(&dom_modern_node_prop_handlers, "baseURI", dom_modern_node_base_uri_read, NULL);
 	DOM_REGISTER_PROP_HANDLER(&dom_modern_node_prop_handlers, "isConnected", dom_node_is_connected_read, NULL);
 	DOM_REGISTER_PROP_HANDLER(&dom_modern_node_prop_handlers, "ownerDocument", dom_node_owner_document_read, NULL);
 	DOM_REGISTER_PROP_HANDLER(&dom_modern_node_prop_handlers, "parentNode", dom_node_parent_node_read, NULL);
 	DOM_REGISTER_PROP_HANDLER(&dom_modern_node_prop_handlers, "parentElement", dom_node_parent_element_read, NULL);
-	DOM_REGISTER_PROP_HANDLER(&dom_modern_node_prop_handlers, "childNodes", dom_node_child_nodes_read, NULL);
+	DOM_REGISTER_PROP_HANDLER(&dom_modern_node_prop_handlers, "childNodes", dom_modern_node_child_nodes_read, NULL);
 	DOM_REGISTER_PROP_HANDLER(&dom_modern_node_prop_handlers, "firstChild", dom_node_first_child_read, NULL);
 	DOM_REGISTER_PROP_HANDLER(&dom_modern_node_prop_handlers, "lastChild", dom_node_last_child_read, NULL);
 	DOM_REGISTER_PROP_HANDLER(&dom_modern_node_prop_handlers, "previousSibling", dom_node_previous_sibling_read, NULL);
@@ -1104,7 +1136,7 @@ PHP_MINIT_FUNCTION(dom)
 
 	dom_modern_element_class_entry = register_class_Dom_Element(dom_modern_node_class_entry, dom_modern_parentnode_class_entry, dom_modern_childnode_class_entry);
 	dom_modern_element_class_entry->create_object = dom_objects_new;
-	dom_modern_element_class_entry->default_object_handlers = &dom_object_handlers;
+	dom_modern_element_class_entry->default_object_handlers = &dom_modern_element_object_handlers;
 
 	zend_hash_init(&dom_modern_element_prop_handlers, 0, NULL, NULL, true);
 	DOM_REGISTER_PROP_HANDLER(&dom_modern_element_prop_handlers, "namespaceURI", dom_node_namespace_uri_read, NULL);
@@ -1128,7 +1160,7 @@ PHP_MINIT_FUNCTION(dom)
 
 	dom_html_element_class_entry = register_class_Dom_HTMLElement(dom_modern_element_class_entry);
 	dom_html_element_class_entry->create_object = dom_objects_new;
-	dom_html_element_class_entry->default_object_handlers = &dom_object_handlers;
+	dom_html_element_class_entry->default_object_handlers = &dom_modern_element_object_handlers;
 	zend_hash_add_new_ptr(&classes, dom_html_element_class_entry->name, &dom_modern_element_prop_handlers);
 
 	dom_text_class_entry = register_class_DOMText(dom_characterdata_class_entry);
@@ -1263,7 +1295,7 @@ PHP_MINIT_FUNCTION(dom)
 	DOM_OVERWRITE_PROP_HANDLER(&dom_modern_entity_reference_prop_handlers, "firstChild", dom_entity_reference_child_read, NULL);
 	DOM_OVERWRITE_PROP_HANDLER(&dom_modern_entity_reference_prop_handlers, "lastChild", dom_entity_reference_child_read, NULL);
 	DOM_OVERWRITE_PROP_HANDLER(&dom_modern_entity_reference_prop_handlers, "textContent", dom_entity_reference_text_content_read, NULL);
-	DOM_OVERWRITE_PROP_HANDLER(&dom_modern_entity_reference_prop_handlers, "childNodes", dom_entity_reference_child_nodes_read, NULL);
+	DOM_OVERWRITE_PROP_HANDLER(&dom_modern_entity_reference_prop_handlers, "childNodes", dom_modern_entity_reference_child_nodes_read, NULL);
 	zend_hash_add_new_ptr(&classes, dom_modern_entityreference_class_entry->name, &dom_modern_entity_reference_prop_handlers);
 
 	dom_processinginstruction_class_entry = register_class_DOMProcessingInstruction(dom_node_class_entry);
@@ -1405,14 +1437,13 @@ void node_list_unlink(xmlNodePtr node)
 	dom_object *wrapper;
 
 	while (node != NULL) {
+		xmlNodePtr next = node->next;
 
 		wrapper = php_dom_object_get_data(node);
 
 		if (wrapper != NULL ) {
 			xmlUnlinkNode(node);
-		} else {
-			if (node->type == XML_ENTITY_REF_NODE)
-				break;
+		} else if (node->type != XML_ENTITY_REF_NODE) {
 			node_list_unlink(node->children);
 
 			switch (node->type) {
@@ -1429,7 +1460,7 @@ void node_list_unlink(xmlNodePtr node)
 
 		}
 
-		node = node->next;
+		node = next;
 	}
 }
 /* }}} end node_list_unlink */
@@ -1935,9 +1966,26 @@ static void dom_merge_adjacent_exclusive_text_nodes(xmlNodePtr node)
 	}
 }
 
+static zend_always_inline bool dom_normalize_check_stack_limit(void)
+{
+#ifdef ZEND_CHECK_STACK_LIMIT
+	if (UNEXPECTED(zend_call_stack_overflowed(EG(stack_limit)))) {
+		if (!EG(exception)) {
+			zend_throw_error(NULL, "Maximum call stack size reached. Infinite recursion?");
+		}
+		return true;
+	}
+#endif
+	return false;
+}
+
 /* {{{ void php_dom_normalize_legacy(xmlNodePtr nodep) */
 void php_dom_normalize_legacy(xmlNodePtr nodep)
 {
+	if (UNEXPECTED(dom_normalize_check_stack_limit())) {
+		return;
+	}
+
 	xmlNodePtr child = nodep->children;
 	while(child != NULL) {
 		switch (child->type) {
@@ -1970,6 +2018,10 @@ void php_dom_normalize_legacy(xmlNodePtr nodep)
 /* https://dom.spec.whatwg.org/#dom-node-normalize */
 void php_dom_normalize_modern(xmlNodePtr this)
 {
+	if (UNEXPECTED(dom_normalize_check_stack_limit())) {
+		return;
+	}
+
 	/* for each descendant exclusive Text node node of this: */
 	xmlNodePtr node = this->children;
 	while (node != NULL) {
@@ -2266,15 +2318,16 @@ xmlNsPtr dom_get_nsdecl(xmlNode *node, xmlChar *localName) {
 }
 /* }}} end dom_get_nsdecl */
 
-static xmlNodePtr php_dom_create_fake_namespace_decl_node_ptr(xmlNodePtr nodep, xmlNsPtr original)
+static xmlNodePtr php_dom_create_fake_namespace_decl_node_ptr(xmlNodePtr nodep, xmlNsPtr original, xmlDocPtr fallback_doc)
 {
 	xmlNodePtr attrp;
+	xmlDocPtr doc = nodep ? nodep->doc : fallback_doc;
 	xmlNsPtr curns = xmlNewNs(NULL, original->href, NULL);
 	if (original->prefix) {
 		curns->prefix = xmlStrdup(original->prefix);
-		attrp = xmlNewDocNode(nodep->doc, NULL, BAD_CAST original->prefix, original->href);
+		attrp = xmlNewDocNode(doc, NULL, BAD_CAST original->prefix, original->href);
 	} else {
-		attrp = xmlNewDocNode(nodep->doc, NULL, BAD_CAST "xmlns", original->href);
+		attrp = xmlNewDocNode(doc, NULL, BAD_CAST "xmlns", original->href);
 	}
 	attrp->type = XML_NAMESPACE_DECL;
 	attrp->parent = nodep;
@@ -2285,7 +2338,7 @@ static xmlNodePtr php_dom_create_fake_namespace_decl_node_ptr(xmlNodePtr nodep, 
 /* Note: Assumes the additional lifetime was already added in the caller. */
 xmlNodePtr php_dom_create_fake_namespace_decl(xmlNodePtr nodep, xmlNsPtr original, zval *return_value, dom_object *parent_intern)
 {
-	xmlNodePtr attrp = php_dom_create_fake_namespace_decl_node_ptr(nodep, original);
+	xmlNodePtr attrp = php_dom_create_fake_namespace_decl_node_ptr(nodep, original, NULL);
 	php_dom_create_object(attrp, return_value, parent_intern);
 	/* This object must exist, because we just created an object for it via php_dom_create_object(). */
 	php_dom_namespace_node_obj_from_obj(Z_OBJ_P(return_value))->parent_intern = parent_intern;
@@ -2373,10 +2426,10 @@ void php_dom_get_content_into_zval(const xmlNode *nodep, zval *return_value, boo
 		}
 
 		case XML_ATTRIBUTE_NODE: {
-			bool free;
-			xmlChar *value = php_libxml_attr_value((const xmlAttr *) nodep, &free);
+			bool should_free;
+			xmlChar *value = php_libxml_attr_value((const xmlAttr *) nodep, &should_free);
 			RETVAL_STRING_FAST((const char *) value);
-			if (free) {
+			if (should_free) {
 				xmlFree(value);
 			}
 			return;

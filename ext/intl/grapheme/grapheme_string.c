@@ -117,7 +117,9 @@ PHP_FUNCTION(grapheme_strpos)
 		if (found) {
 			RETURN_LONG(found - haystack);
 		}
-		RETURN_FALSE;
+		if (grapheme_ascii_check((unsigned char *)needle, needle_len) >= 0) {
+			RETURN_FALSE;
+		}
 	}
 
 	/* do utf16 part of the strpos */
@@ -550,7 +552,9 @@ static void strstr_common_handler(INTERNAL_FUNCTION_PARAMETERS, int f_ignore_cas
 		Z_PARAM_BOOL(part)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if ( !f_ignore_case ) {
+	if ( !f_ignore_case
+			&& grapheme_ascii_check((unsigned char *)haystack, haystack_len) >= 0
+			&& grapheme_ascii_check((unsigned char *)needle, needle_len) >= 0 ) {
 
 		/* ASCII optimization: quick check to see if the string might be there */
 		found = php_memnstr(haystack, needle, needle_len, haystack + haystack_len);
@@ -560,15 +564,12 @@ static void strstr_common_handler(INTERNAL_FUNCTION_PARAMETERS, int f_ignore_cas
 			RETURN_FALSE;
 		}
 
-		/* if it is there, and if the haystack is ascii, we are all done */
-		if ( grapheme_ascii_check((unsigned char *)haystack, haystack_len) >= 0 ) {
-			size_t found_offset = found - haystack;
+		size_t found_offset = found - haystack;
 
-			if (part) {
-				RETURN_STRINGL(haystack, found_offset);
-			} else {
-				RETURN_STRINGL(found, haystack_len - found_offset);
-			}
+		if (part) {
+			RETURN_STRINGL(haystack, found_offset);
+		} else {
+			RETURN_STRINGL(found, haystack_len - found_offset);
 		}
 
 	}
@@ -734,15 +735,10 @@ PHP_FUNCTION(grapheme_extract)
 	}
 
 	if ( NULL != next ) {
-		if ( !Z_ISREF_P(next) ) {
-			intl_error_set( NULL, U_ILLEGAL_ARGUMENT_ERROR,
-				 "grapheme_extract: 'next' was not passed by reference", 0 );
-			RETURN_FALSE;
-		} else {
-			ZVAL_DEREF(next);
-			/* initialize next */
-			zval_ptr_dtor(next);
-			ZVAL_LONG(next, lstart);
+		ZEND_ASSERT(Z_ISREF_P(next));
+		ZEND_TRY_ASSIGN_REF_LONG(next, lstart);
+		if (UNEXPECTED(EG(exception))) {
+			RETURN_THROWS();
 		}
 	}
 
@@ -790,7 +786,8 @@ PHP_FUNCTION(grapheme_extract)
 		}
 	}
 
-	str_len -= (pstr - str);
+	lstart = pstr - str;
+	str_len -= lstart;
 
 	/* if the string is all ASCII up to size+1 - or str_len whichever is first - then we are done.
 		(size + 1 because the size-th character might be the beginning of a grapheme cluster)
@@ -799,7 +796,7 @@ PHP_FUNCTION(grapheme_extract)
 	if ( -1 != grapheme_ascii_check((unsigned char *)pstr, MIN(size + 1, str_len)) ) {
 		size_t nsize = MIN(size, str_len);
 		if ( NULL != next ) {
-			ZVAL_LONG(next, start+nsize);
+			ZEND_TRY_ASSIGN_REF_LONG(next, lstart + nsize);
 		}
 		RETURN_STRINGL(pstr, nsize);
 	}
@@ -833,7 +830,7 @@ PHP_FUNCTION(grapheme_extract)
 	ubrk_close(bi);
 
 	if ( NULL != next ) {
-		ZVAL_LONG(next, start+ret_pos);
+		ZEND_TRY_ASSIGN_REF_LONG(next, lstart + ret_pos);
 	}
 
 	RETURN_STRINGL(((char *)pstr), ret_pos);
@@ -899,11 +896,14 @@ PHP_FUNCTION(grapheme_str_split)
 		if (i == split_len - 1) {
 			if ( pos != UBRK_DONE ) {
 				add_next_index_stringl(return_value, pstr, pos - current);
+				if (ZEND_HAS_OOM()) {
+					goto oom;
+				}
 				end = pstr + pos - current;
 				i = 0;
+				pstr += pos - current;
+				current = pos;
 			}
-			pstr += pos - current;
-			current = pos;
 		} else {
 			i += 1;
 		}
@@ -915,6 +915,12 @@ PHP_FUNCTION(grapheme_str_split)
 
 	utext_close(ut);
 	ubrk_close(bi);
+	return;
+
+oom:
+	utext_close(ut);
+	ubrk_close(bi);
+	RETURN_OOM();
 }
 
 /* }}} */

@@ -178,7 +178,11 @@ PHP_FUNCTION(assert)
 	zend_string *description_str = NULL;
 	zend_object *description_obj = NULL;
 
-	if (!ASSERTG(active)) {
+	/* EG(assertions) <= 0 is only reachable by dynamic calls to assert(),
+	 * since calls known at compile time will skip the entire call when
+	 * assertions are disabled.
+	 */
+	if (!ASSERTG(active) || EG(assertions) <= 0) {
 		RETURN_TRUE;
 	}
 
@@ -243,7 +247,9 @@ PHP_FUNCTION(assert)
 			 * exception so we can avoid bailout and use unwind_exit. */
 			zend_exception_error(EG(exception), E_WARNING);
 		}
-		zend_throw_unwind_exit();
+		if (!EG(exception)) {
+			zend_throw_unwind_exit();
+		}
 		RETURN_THROWS();
 	} else {
 		RETURN_FALSE;

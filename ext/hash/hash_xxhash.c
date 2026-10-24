@@ -34,6 +34,7 @@ const php_hash_ops php_hash_xxh32_ops = {
 	4,
 	4,
 	sizeof(PHP_XXH32_CTX),
+	0,
 	0
 };
 
@@ -101,6 +102,7 @@ const php_hash_ops php_hash_xxh64_ops = {
 	8,
 	8,
 	sizeof(PHP_XXH64_CTX),
+	0,
 	0
 };
 
@@ -113,11 +115,13 @@ PHP_HASH_API void PHP_XXH64Init(PHP_XXH64_CTX *ctx, HashTable *args)
 		zval *seed = zend_hash_str_find_deref(args, "seed", sizeof("seed") - 1);
 		/* This might be a bit too restrictive, but thinking that a seed might be set
 			once and for all, it should be done a clean way. */
-		if (seed && IS_LONG == Z_TYPE_P(seed)) {
-			XXH64_reset(&ctx->s, (XXH64_hash_t)Z_LVAL_P(seed));
-			return;
-		} else {
-			php_error_docref(NULL, E_DEPRECATED, "Passing a seed of a type other than int is deprecated because it is the same as setting the seed to 0");
+		if (seed) {
+			if (IS_LONG == Z_TYPE_P(seed)) {
+				XXH64_reset(&ctx->s, (XXH64_hash_t)Z_LVAL_P(seed));
+				return;
+			} else {
+				php_error_docref(NULL, E_DEPRECATED, "Passing a seed of a type other than int is deprecated because it is the same as setting the seed to 0");
+			}
 		}
 	}
 
@@ -152,13 +156,14 @@ const php_hash_ops php_hash_xxh3_64_ops = {
 	8,
 	8,
 	sizeof(PHP_XXH3_64_CTX),
-	0
+	0,
+	64
 };
 
 typedef XXH_errorcode (*xxh3_reset_with_secret_func_t)(XXH3_state_t*, const void*, size_t);
 typedef XXH_errorcode (*xxh3_reset_with_seed_func_t)(XXH3_state_t*, XXH64_hash_t);
 
-zend_always_inline static void _PHP_XXH3_Init(PHP_XXH3_64_CTX *ctx, HashTable *args,
+static void _PHP_XXH3_Init(PHP_XXH3_64_CTX *ctx, HashTable *args,
 		xxh3_reset_with_seed_func_t func_init_seed, xxh3_reset_with_secret_func_t func_init_secret, const char* algo_name)
 {
 	memset(&ctx->s, 0, sizeof ctx->s);
@@ -257,7 +262,8 @@ const php_hash_ops php_hash_xxh3_128_ops = {
 	16,
 	8,
 	sizeof(PHP_XXH3_128_CTX),
-	0
+	0,
+	64
 };
 
 PHP_HASH_API void PHP_XXH3_128_Init(PHP_XXH3_128_CTX *ctx, HashTable *args)

@@ -103,7 +103,9 @@ void zend_exception_set_previous(zend_object *exception, zend_object *add_previo
 		return;
 	}
 
-	if (exception == add_previous || zend_is_unwind_exit(add_previous) || zend_is_graceful_exit(add_previous)) {
+	if (exception == add_previous
+	 || zend_is_unwind_exit(exception) || zend_is_graceful_exit(exception)
+	 || zend_is_unwind_exit(add_previous) || zend_is_graceful_exit(add_previous)) {
 		OBJ_RELEASE(add_previous);
 		return;
 	}
@@ -135,6 +137,8 @@ void zend_exception_set_previous(zend_object *exception, zend_object *add_previo
 		}
 		ex = previous;
 	} while (Z_OBJ_P(ex) != add_previous);
+
+	OBJ_RELEASE(add_previous);
 }
 /* }}} */
 
@@ -320,15 +324,24 @@ ZEND_METHOD(Exception, __construct)
 	if (message) {
 		ZVAL_STR(&tmp, message);
 		zend_update_property_ex(base_ce, Z_OBJ_P(object), ZSTR_KNOWN(ZEND_STR_MESSAGE), &tmp);
+		if (UNEXPECTED(EG(exception))) {
+			RETURN_THROWS();
+		}
 	}
 
 	if (code) {
 		ZVAL_LONG(&tmp, code);
 		zend_update_property_ex(base_ce, Z_OBJ_P(object), ZSTR_KNOWN(ZEND_STR_CODE), &tmp);
+		if (UNEXPECTED(EG(exception))) {
+			RETURN_THROWS();
+		}
 	}
 
 	if (previous) {
 		zend_update_property_ex(base_ce, Z_OBJ_P(object), ZSTR_KNOWN(ZEND_STR_PREVIOUS), previous);
+		if (UNEXPECTED(EG(exception))) {
+			RETURN_THROWS();
+		}
 	}
 }
 /* }}} */
@@ -370,32 +383,53 @@ ZEND_METHOD(ErrorException, __construct)
 		ZVAL_STR_COPY(&tmp, message);
 		zend_update_property_ex(zend_ce_exception, Z_OBJ_P(object), ZSTR_KNOWN(ZEND_STR_MESSAGE), &tmp);
 		zval_ptr_dtor(&tmp);
+		if (UNEXPECTED(EG(exception))) {
+			RETURN_THROWS();
+		}
 	}
 
 	if (code) {
 		ZVAL_LONG(&tmp, code);
 		zend_update_property_ex(zend_ce_exception, Z_OBJ_P(object), ZSTR_KNOWN(ZEND_STR_CODE), &tmp);
+		if (UNEXPECTED(EG(exception))) {
+			RETURN_THROWS();
+		}
 	}
 
 	if (previous) {
 		zend_update_property_ex(zend_ce_exception, Z_OBJ_P(object), ZSTR_KNOWN(ZEND_STR_PREVIOUS), previous);
+		if (UNEXPECTED(EG(exception))) {
+			RETURN_THROWS();
+		}
 	}
 
 	ZVAL_LONG(&tmp, severity);
 	zend_update_property_ex(zend_ce_exception, Z_OBJ_P(object), ZSTR_KNOWN(ZEND_STR_SEVERITY), &tmp);
+	if (UNEXPECTED(EG(exception))) {
+		RETURN_THROWS();
+	}
 
 	if (filename) {
 		ZVAL_STR_COPY(&tmp, filename);
 		zend_update_property_ex(zend_ce_exception, Z_OBJ_P(object), ZSTR_KNOWN(ZEND_STR_FILE), &tmp);
 		zval_ptr_dtor(&tmp);
+		if (UNEXPECTED(EG(exception))) {
+			RETURN_THROWS();
+		}
 	}
 
 	if (!lineno_is_null) {
 		ZVAL_LONG(&tmp, lineno);
 		zend_update_property_ex(zend_ce_exception, Z_OBJ_P(object), ZSTR_KNOWN(ZEND_STR_LINE), &tmp);
+		if (UNEXPECTED(EG(exception))) {
+			RETURN_THROWS();
+		}
 	} else if (filename) {
 		ZVAL_LONG(&tmp, 0);
 		zend_update_property_ex(zend_ce_exception, Z_OBJ_P(object), ZSTR_KNOWN(ZEND_STR_LINE), &tmp);
+		if (UNEXPECTED(EG(exception))) {
+			RETURN_THROWS();
+		}
 	}
 }
 /* }}} */
@@ -858,14 +892,13 @@ ZEND_API ZEND_COLD zend_object *zend_throw_exception(zend_class_entry *exception
 ZEND_API ZEND_COLD zend_object *zend_throw_exception_ex(zend_class_entry *exception_ce, zend_long code, const char *format, ...) /* {{{ */
 {
 	va_list arg;
-	char *message;
 	zend_object *obj;
 
 	va_start(arg, format);
-	zend_vspprintf(&message, 0, format, arg);
+	zend_string *msg_str = zend_vstrpprintf(0, format, arg);
 	va_end(arg);
-	obj = zend_throw_exception(exception_ce, message, code);
-	efree(message);
+	obj = zend_throw_exception_zstr(exception_ce, msg_str, code);
+	zend_string_release(msg_str);
 	return obj;
 }
 /* }}} */

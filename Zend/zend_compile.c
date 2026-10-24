@@ -459,6 +459,7 @@ void init_compiler(void) /* {{{ */
 	CG(delayed_autoloads) = NULL;
 	CG(unlinked_uses) = NULL;
 	CG(current_linking_class) = NULL;
+	CG(interned_strings_fallible) = false;
 }
 /* }}} */
 
@@ -2023,12 +2024,12 @@ ZEND_API void zend_activate_auto_globals(void) /* {{{ */
 	zend_auto_global *auto_global;
 
 	ZEND_HASH_MAP_FOREACH_PTR(CG(auto_globals), auto_global) {
-		if (auto_global->jit) {
-			auto_global->armed = 1;
-		} else if (auto_global->auto_global_callback) {
+		auto_global->armed = auto_global->jit || auto_global->auto_global_callback;
+	} ZEND_HASH_FOREACH_END();
+
+	ZEND_HASH_MAP_FOREACH_PTR(CG(auto_globals), auto_global) {
+		if (auto_global->armed && !auto_global->jit) {
 			auto_global->armed = auto_global->auto_global_callback(auto_global->name);
-		} else {
-			auto_global->armed = 0;
 		}
 	} ZEND_HASH_FOREACH_END();
 }
@@ -2188,7 +2189,7 @@ ZEND_API size_t zend_dirname(char *path, size_t len)
 	/* Note that on Win32 CWD is per drive (heritage from CP/M).
 	 * This means dirname("c:foo") maps to "c:." or "c:" - which means CWD on C: drive.
 	 */
-	if ((2 <= len) && isalpha((int)((unsigned char *)path)[0]) && (':' == path[1])) {
+	if ((2 <= len) && isalpha((unsigned char)path[0]) && (':' == path[1])) {
 		/* Skip over the drive spec (if any) so as not to change */
 		path += 2;
 		len_adjust += 2;
@@ -2466,9 +2467,14 @@ static inline zend_op *zend_delayed_emit_op(znode *result, uint8_t opcode, znode
 }
 /* }}} */
 
-static inline uint32_t zend_delayed_compile_begin(void) /* {{{ */
+static zend_always_inline uint32_t zend_delayed_oplines_stack_size(void)
 {
 	return zend_stack_count(&CG(delayed_oplines_stack));
+}
+
+static inline uint32_t zend_delayed_compile_begin(void) /* {{{ */
+{
+	return zend_delayed_oplines_stack_size();
 }
 /* }}} */
 
@@ -3155,6 +3161,7 @@ static zend_op *zend_delayed_compile_prop(znode *result, zend_ast *ast, uint32_t
 		/* We will throw if $this doesn't exist, so there's no need to emit a JMP_NULL
 		 * check for a nullsafe access. */
 	} else {
+		uint32_t offset = zend_delayed_oplines_stack_size();
 		zend_short_circuiting_mark_inner(obj_ast);
 		opline = zend_delayed_compile_var(&obj_node, obj_ast, type, 0);
 		if (opline && (opline->opcode == ZEND_FETCH_DIM_W
@@ -3170,10 +3177,11 @@ static zend_op *zend_delayed_compile_prop(znode *result, zend_ast *ast, uint32_t
 				/* Flush delayed oplines */
 				zend_op *opline = NULL, *oplines = zend_stack_base(&CG(delayed_oplines_stack));
 				uint32_t var = obj_node.u.op.var;
-				uint32_t count = zend_stack_count(&CG(delayed_oplines_stack));
+				uint32_t count = zend_delayed_oplines_stack_size();
 				uint32_t i = count;
 
-				while (i > 0 && oplines[i-1].result_type == IS_TMP_VAR && oplines[i-1].result.var == var) {
+				/* Only consider the oplines delayed while compiling obj_ast. */
+				while (i > offset && oplines[i-1].result_type == IS_TMP_VAR && oplines[i-1].result.var == var) {
 					i--;
 					if (oplines[i].op1_type == IS_TMP_VAR) {
 						var = oplines[i].op1.var;
@@ -5204,7 +5212,7 @@ static void zend_compile_call(znode *result, zend_ast *ast, uint32_t type) /* {{
 		}
 
 		zval_ptr_dtor(&name_node.u.constant);
-		ZVAL_NEW_STR(&name_node.u.constant, lcname);
+		ZVAL_STR(&name_node.u.constant, lcname);
 
 		opline = zend_emit_op(NULL, ZEND_INIT_FCALL, NULL, &name_node);
 		opline->result.num = zend_alloc_cache_slot();
@@ -5726,7 +5734,19 @@ static void zend_compile_return(zend_ast *ast) /* {{{ */
 			expr_ast ? &expr_node : NULL, CG(active_op_array)->arg_info - 1, 0);
 	}
 
+	uint32_t opnum_before_finally = get_next_op_number();
+
 	zend_handle_loops_and_finally((expr_node.op_type & (IS_TMP_VAR | IS_VAR)) ? &expr_node : NULL);
+
+	/* Content of reference might have changed in finally, repeat type check. */
+	if (by_ref
+	 /* Check if any opcodes were emitted since the last return type check. */
+	 && opnum_before_finally != get_next_op_number()
+	 && !is_generator
+	 && (CG(active_op_array)->fn_flags & ZEND_ACC_HAS_RETURN_TYPE)) {
+		zend_emit_return_type_check(
+			expr_ast ? &expr_node : NULL, CG(active_op_array)->arg_info - 1, 0);
+	}
 
 	opline = zend_emit_op(NULL, by_ref ? ZEND_RETURN_BY_REF : ZEND_RETURN,
 		&expr_node, NULL);
@@ -8646,7 +8666,7 @@ static void zend_compile_prop_decl(zend_ast *ast, zend_ast *type_ast, uint32_t f
 		/* FIXME: This is a dirty fix to maintain ABI compatibility. We don't
 		 * have an actual property info yet, but we really only need the name
 		 * anyway. We should convert this to a zend_string. */
-		ZEND_ASSERT(!CG(context).active_property_info);
+		const zend_property_info *old_active_property_info = CG(context).active_property_info;
 		zend_property_info dummy_prop_info = { .name = name };
 		CG(context).active_property_info = &dummy_prop_info;
 
@@ -8743,7 +8763,7 @@ static void zend_compile_prop_decl(zend_ast *ast, zend_ast *type_ast, uint32_t f
 			zend_compile_attributes(&info->attributes, attr_ast, 0, ZEND_ATTRIBUTE_TARGET_PROPERTY, 0);
 		}
 
-		CG(context).active_property_info = NULL;
+		CG(context).active_property_info = old_active_property_info;
 	}
 }
 /* }}} */
@@ -8823,6 +8843,10 @@ static void zend_compile_class_const_decl(zend_ast *ast, uint32_t flags, zend_as
 
 			if (deprecated) {
 				ZEND_CLASS_CONST_FLAGS(c) |= ZEND_ACC_DEPRECATED;
+				/* For deprecated constants, we need to flag the zval for recursion
+				 * detection. Make sure the zval is separated out of shm. */
+				ce->ce_flags |= ZEND_ACC_HAS_AST_CONSTANTS;
+				ce->ce_flags &= ~ZEND_ACC_CONSTANTS_UPDATED;
 			}
 		}
 	}
@@ -9551,7 +9575,11 @@ static void zend_compile_halt_compiler(zend_ast *ast) /* {{{ */
 	name = zend_mangle_property_name(const_name, sizeof(const_name) - 1,
 		ZSTR_VAL(filename), ZSTR_LEN(filename), 0);
 
-	zend_register_long_constant(ZSTR_VAL(name), ZSTR_LEN(name), offset, 0, 0);
+	/* Avoid repeated declaration of the __COMPILER_HALT_OFFSET__ constant in
+	 * case this file was already included. */
+	if (!zend_hash_find(EG(zend_constants), name)) {
+		zend_register_long_constant(ZSTR_VAL(name), ZSTR_LEN(name), offset, 0, 0);
+	}
 	zend_string_release_ex(name, 0);
 }
 /* }}} */

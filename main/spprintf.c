@@ -148,12 +148,12 @@
 #define NUM(c) (c - '0')
 
 #define STR_TO_DEC(str, num) do {			\
-	num = NUM(*str++);                  	\
-	while (isdigit((int)*str)) {        	\
+	num = NUM(*(str)++);                  	\
+	while (isdigit((unsigned char)*(str))) {\
 		num *= 10;                      	\
-		num += NUM(*str++);             	\
+		num += NUM(*(str)++);             	\
 		if (num >= INT_MAX / 10) {			\
-			while (isdigit((int)*str++));	\
+			while (isdigit((unsigned char)*(str)++));	\
 			break;							\
 		}									\
     }										\
@@ -233,7 +233,7 @@ static void xbuf_format_converter(void *xbuf, bool is_char, const char *fmt, va_
 			/*
 			 * Try to avoid checking for flags, width or precision
 			 */
-			if (isascii((int)*fmt) && !islower((int)*fmt)) {
+			if (isascii((unsigned char)*fmt) && !islower((unsigned char)*fmt)) {
 				/*
 				 * Recognize flags: -, #, BLANK, +
 				 */
@@ -255,7 +255,7 @@ static void xbuf_format_converter(void *xbuf, bool is_char, const char *fmt, va_
 				/*
 				 * Check if a width was specified
 				 */
-				if (isdigit((int)*fmt)) {
+				if (isdigit((unsigned char)*fmt)) {
 					STR_TO_DEC(fmt, min_width);
 					adjust_width = true;
 				} else if (*fmt == '*') {
@@ -275,7 +275,7 @@ static void xbuf_format_converter(void *xbuf, bool is_char, const char *fmt, va_
 				if (*fmt == '.') {
 					adjust_precision = true;
 					fmt++;
-					if (isdigit((int)*fmt)) {
+					if (isdigit((unsigned char)*fmt)) {
 						STR_TO_DEC(fmt, precision);
 					} else if (*fmt == '*') {
 						precision = va_arg(ap, int);
@@ -363,21 +363,34 @@ static void xbuf_format_converter(void *xbuf, bool is_char, const char *fmt, va_
 			switch (*fmt) {
 				case 'Z': {
 					zval *zvp = va_arg(ap, zval*);
-					zend_string *str = zval_get_tmp_string(zvp, &tmp_str);
-					s_len = ZSTR_LEN(str);
-					s = ZSTR_VAL(str);
-					if (adjust_precision && (size_t)precision < s_len) {
-						s_len = precision;
+					if (EXPECTED(zvp != NULL)) {
+						zend_string *str = zval_get_tmp_string(zvp, &tmp_str);
+						s_len = ZSTR_LEN(str);
+						s = ZSTR_VAL(str);
+						if (adjust_precision && (size_t)precision < s_len) {
+							s_len = precision;
+						}
+					} else {
+						s = S_NULL;
+						s_len = S_NULL_LEN;
 					}
+					pad_char = ' ';
 					break;
 				}
 				case 'S': {
+format_zend_string:;
 					zend_string *str = va_arg(ap, zend_string*);
-					s_len = ZSTR_LEN(str);
-					s = ZSTR_VAL(str);
-					if (adjust_precision && (size_t)precision < s_len) {
-						s_len = precision;
+					if (EXPECTED(str != NULL)) {
+						s_len = ZSTR_LEN(str);
+						s = ZSTR_VAL(str);
+						if (adjust_precision && (size_t)precision < s_len) {
+							s_len = precision;
+						}
+					} else {
+						s = S_NULL;
+						s_len = S_NULL_LEN;
 					}
+					pad_char = ' ';
 					break;
 				}
 				case 'u':
@@ -695,6 +708,24 @@ static void xbuf_format_converter(void *xbuf, bool is_char, const char *fmt, va_
 					 * we print "%p" to indicate that we don't handle "%p".
 					 */
 				case 'p':
+					/* %p[alnum]+ extensions */
+					switch (*(fmt+1)) {
+						case 'S':
+							/* zend_string* */
+							fmt++;
+							goto format_zend_string;
+						case 'p':
+							/* pointer */
+							fmt++;
+							break;
+						default:
+							if (isalnum((unsigned char)*(fmt+1))) {
+								zend_error_noreturn(E_CORE_ERROR,
+									"Invalid printf specifier \"p%c\"", *(fmt+1));
+							}
+							break;
+					}
+					/* Normal %p */
 					if (sizeof(char *) <= sizeof(uint64_t)) {
 						ui_num = (uint64_t)((size_t) va_arg(ap, char *));
 						s = ap_php_conv_p2(ui_num, 4, 'x',

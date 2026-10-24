@@ -27,7 +27,6 @@
 #include "xml_serializer.h"
 #include "internal_helpers.h"
 #include "dom_properties.h"
-#include <libxml/SAX.h>
 #ifdef LIBXML_SCHEMAS_ENABLED
 #include <libxml/relaxng.h>
 #include <libxml/xmlschemas.h>
@@ -1087,26 +1086,32 @@ static zend_always_inline void php_dom_transfer_document_ref_single_node(xmlNode
 	}
 }
 
-static void php_dom_transfer_document_ref(xmlNodePtr node, php_libxml_ref_obj *new_document)
+static zend_always_inline void php_dom_transfer_document_ref_single_aux(xmlNodePtr node, php_libxml_ref_obj *new_document)
 {
-	if (node->children) {
-		php_dom_transfer_document_ref(node->children, new_document);
-	}
-
-	while (node) {
-		if (node->type == XML_ELEMENT_NODE) {
-			for (xmlAttrPtr attr = node->properties; attr != NULL; attr = attr->next) {
-				php_dom_transfer_document_ref_single_node((xmlNodePtr) attr, new_document);
+	php_dom_transfer_document_ref_single_node(node, new_document);
+	if (node->type == XML_ELEMENT_NODE) {
+		for (xmlAttrPtr attr = node->properties; attr; attr = attr->next) {
+			php_dom_transfer_document_ref_single_node((xmlNodePtr) attr, new_document);
+			for (xmlNodePtr child = attr->children; child; child = child->next) {
+				php_dom_transfer_document_ref_single_node((xmlNodePtr) child, new_document);
 			}
 		}
-
-		php_dom_transfer_document_ref_single_node(node, new_document);
-		node = node->next;
 	}
 }
 
-/* Workaround for bug that was fixed in https://github.com/GNOME/libxml2/commit/4bc3ebf3eaba352fbbce2ef70ad00a3c7752478a */
-#if LIBXML_VERSION < 21000
+static void php_dom_transfer_document_ref(xmlNodePtr node, php_libxml_ref_obj *new_document)
+{
+	php_dom_transfer_document_ref_single_aux(node, new_document);
+	xmlNodePtr tmp = node->children;
+	while (tmp) {
+		php_dom_transfer_document_ref_single_aux(tmp, new_document);
+		tmp = php_dom_next_in_tree_order(tmp, node);
+	}
+}
+
+/* Workaround for bug that was fixed in https://github.com/GNOME/libxml2/commit/4bc3ebf3eaba352fbbce2ef70ad00a3c7752478a
+ * and https://github.com/GNOME/libxml2/commit/bc7ab5a2e61e4b36accf6803c5b0e245c11154b1 */
+#if LIBXML_VERSION < 21300
 static xmlChar *libxml_copy_dicted_string(xmlDictPtr src_dict, xmlDictPtr dst_dict, xmlChar *str)
 {
 	if (str == NULL) {
@@ -1123,30 +1128,43 @@ static xmlChar *libxml_copy_dicted_string(xmlDictPtr src_dict, xmlDictPtr dst_di
 
 static void libxml_fixup_name_and_content(xmlDocPtr src_doc, xmlDocPtr dst_doc, xmlNodePtr node)
 {
-	if (src_doc != NULL && dst_doc != src_doc && src_doc->dict != NULL) {
+	if (node->type == XML_ENTITY_REF_NODE) {
+		node->children = NULL; /* Break link with original document. */
+	}
+	if (src_doc != NULL && src_doc->dict != NULL) {
+		ZEND_ASSERT(dst_doc != src_doc);
 		node->name = libxml_copy_dicted_string(src_doc->dict, dst_doc->dict, BAD_CAST node->name);
 		node->content = libxml_copy_dicted_string(src_doc->dict, NULL, node->content);
 	}
 }
 
-static void libxml_fixup_name_and_content_element(xmlDocPtr src_doc, xmlDocPtr dst_doc, xmlNodePtr node)
+static void libxml_fixup_name_and_content_outer(xmlDocPtr src_doc, xmlDocPtr dst_doc, xmlNodePtr node)
 {
 	libxml_fixup_name_and_content(src_doc, dst_doc, node);
-	for (xmlAttrPtr attr = node->properties; attr != NULL; attr = attr->next) {
-		libxml_fixup_name_and_content(src_doc, dst_doc, (xmlNodePtr) attr);
+
+	if (node->type == XML_ELEMENT_NODE) {
+		for (xmlAttrPtr attr = node->properties; attr != NULL; attr = attr->next) {
+			libxml_fixup_name_and_content(src_doc, dst_doc, (xmlNodePtr) attr);
+			for (xmlNodePtr attr_child = attr->children; attr_child != NULL; attr_child = attr_child->next) {
+				libxml_fixup_name_and_content(src_doc, dst_doc, attr_child);
+			}
+		}
 	}
 
-	for (xmlNodePtr child = node->children; child != NULL; child = child->next) {
-		libxml_fixup_name_and_content_element(src_doc, dst_doc, child);
+	if (node->type == XML_ELEMENT_NODE || node->type == XML_ATTRIBUTE_NODE) {
+		for (xmlNodePtr child = node->children; child != NULL; child = child->next) {
+			libxml_fixup_name_and_content_outer(src_doc, dst_doc, child);
+		}
 	}
 }
 #endif
 
 bool php_dom_adopt_node(xmlNodePtr nodep, dom_object *dom_object_new_document, xmlDocPtr new_document)
 {
-	xmlDocPtr original_document = nodep->doc;
-	php_libxml_invalidate_node_list_cache_from_doc(original_document);
-	if (nodep->doc != new_document) {
+	xmlDocPtr old_doc = nodep->doc;
+
+	php_libxml_invalidate_node_list_cache_from_doc(old_doc);
+	if (old_doc != new_document) {
 		php_libxml_invalidate_node_list_cache(dom_object_new_document->document);
 
 		/* Note for ATTRIBUTE_NODE: specified is always true in ext/dom,
@@ -1156,15 +1174,17 @@ bool php_dom_adopt_node(xmlNodePtr nodep, dom_object *dom_object_new_document, x
 			xmlSetTreeDoc(nodep, new_document);
 			php_dom_libxml_ns_mapper *ns_mapper = php_dom_get_ns_mapper(dom_object_new_document);
 			php_dom_libxml_reconcile_modern(ns_mapper, nodep);
-#if LIBXML_VERSION < 21000
-			libxml_fixup_name_and_content_element(original_document, new_document, nodep);
-#endif
 		} else {
-			int ret = xmlDOMWrapAdoptNode(NULL, original_document, nodep, new_document, NULL, /* options, unused */ 0);
+			int ret = xmlDOMWrapAdoptNode(NULL, old_doc, nodep, new_document, NULL, /* options, unused */ 0);
 			if (UNEXPECTED(ret != 0)) {
 				return false;
 			}
 		}
+
+#if LIBXML_VERSION < 21300
+		/* Must be first before transferring the ref to ensure the old document dictionary stays alive. */
+		libxml_fixup_name_and_content_outer(old_doc, new_document, nodep);
+#endif
 
 		php_dom_transfer_document_ref(nodep, dom_object_new_document->document);
 	} else {
@@ -1266,7 +1286,7 @@ PHP_METHOD(DOMDocument, __construct)
 	}
 
 	if (encoding_len > 0) {
-		docp->encoding = (const xmlChar *) xmlStrdup(BAD_CAST encoding);
+		docp->encoding = xmlStrdup((const xmlChar *) encoding);
 	}
 
 	intern = Z_DOMOBJ_P(ZEND_THIS);
@@ -1584,12 +1604,16 @@ PHP_METHOD(DOMDocument, save)
 	libxml_doc_props const* doc_props = dom_get_doc_props_read_only(intern->document);
 	bool format = doc_props->formatoutput;
 	if (options & LIBXML_SAVE_NOEMPTYTAG) {
+		ZEND_DIAGNOSTIC_IGNORED_START("-Wdeprecated-declarations")
 		saveempty = xmlSaveNoEmptyTags;
 		xmlSaveNoEmptyTags = 1;
+		ZEND_DIAGNOSTIC_IGNORED_END
 	}
 	zend_long bytes = intern->document->handlers->dump_doc_to_file(file, docp, format, (const char *) docp->encoding);
 	if (options & LIBXML_SAVE_NOEMPTYTAG) {
+		ZEND_DIAGNOSTIC_IGNORED_START("-Wdeprecated-declarations")
 		xmlSaveNoEmptyTags = saveempty;
+		ZEND_DIAGNOSTIC_IGNORED_END
 	}
 	if (bytes == -1) {
 		RETURN_FALSE;
@@ -1630,10 +1654,14 @@ static void dom_document_save_xml(INTERNAL_FUNCTION_PARAMETERS, zend_class_entry
 
 		/* Save libxml2 global, override its value, and restore after saving (don't move me or risk breaking the state
 		 * w.r.t. the implicit return in DOM_GET_OBJ). */
+		ZEND_DIAGNOSTIC_IGNORED_START("-Wdeprecated-declarations")
 		old_xml_save_no_empty_tags = xmlSaveNoEmptyTags;
 		xmlSaveNoEmptyTags = (options & LIBXML_SAVE_NOEMPTYTAG) ? 1 : 0;
+		ZEND_DIAGNOSTIC_IGNORED_END
 		res = intern->document->handlers->dump_node_to_str(docp, node, format, (const char *) docp->encoding);
+		ZEND_DIAGNOSTIC_IGNORED_START("-Wdeprecated-declarations")
 		xmlSaveNoEmptyTags = old_xml_save_no_empty_tags;
+		ZEND_DIAGNOSTIC_IGNORED_END
 	} else {
 		int converted_options = XML_SAVE_AS_XML;
 		if (options & XML_SAVE_NO_DECL) {
@@ -1644,14 +1672,20 @@ static void dom_document_save_xml(INTERNAL_FUNCTION_PARAMETERS, zend_class_entry
 		}
 
 		/* Save libxml2 global, override its value, and restore after saving. */
+		ZEND_DIAGNOSTIC_IGNORED_START("-Wdeprecated-declarations")
 		old_xml_save_no_empty_tags = xmlSaveNoEmptyTags;
 		xmlSaveNoEmptyTags = (options & LIBXML_SAVE_NOEMPTYTAG) ? 1 : 0;
+		ZEND_DIAGNOSTIC_IGNORED_END
 		res = intern->document->handlers->dump_doc_to_str(docp, converted_options, (const char *) docp->encoding);
+		ZEND_DIAGNOSTIC_IGNORED_START("-Wdeprecated-declarations")
 		xmlSaveNoEmptyTags = old_xml_save_no_empty_tags;
+		ZEND_DIAGNOSTIC_IGNORED_END
 	}
 
 	if (!res) {
-		php_error_docref(NULL, E_WARNING, "Could not save document");
+		if (!EG(exception)) {
+			php_error_docref(NULL, E_WARNING, "Could not save document");
+		}
 		RETURN_FALSE;
 	} else {
 		RETURN_NEW_STR(res);
@@ -1669,14 +1703,28 @@ PHP_METHOD(Dom_XMLDocument, saveXml)
 }
 /* }}} end dom_document_savexml */
 
+static void dom_xinclude_strip_references_for_attributes(xmlNodePtr basep)
+{
+	for (xmlAttrPtr prop = basep->properties; prop; prop = prop->next) {
+		php_libxml_node_free_resource((xmlNodePtr) prop);
+		for (xmlNodePtr child = prop->children; child; child = child->next) {
+			php_libxml_node_free_resource(child);
+		}
+	}
+}
+
 static void dom_xinclude_strip_references(xmlNodePtr basep)
 {
 	php_libxml_node_free_resource(basep);
+	dom_xinclude_strip_references_for_attributes(basep);
 
 	xmlNodePtr current = basep->children;
 
 	while (current) {
 		php_libxml_node_free_resource(current);
+		if (current->type == XML_ELEMENT_NODE) {
+			dom_xinclude_strip_references_for_attributes(current);
+		}
 		current = php_dom_next_in_tree_order(current, basep);
 	}
 }
@@ -1714,6 +1762,35 @@ static int dom_perform_xinclude(xmlDocPtr docp, dom_object *intern, zend_long fl
 	php_libxml_invalidate_node_list_cache(intern->document);
 
 	return err;
+}
+
+/* For modern DOM, namespace declarations are stored as attributes (node->nsDef
+ * is NULL), so libxml's native validators can't resolve prefixed QNames found in
+ * content (e.g. an xs:QName attribute value). Temporarily relink them, mirroring
+ * what C14N does in dom_canonicalization(). */
+typedef struct {
+	HashTable links;
+	bool active;
+} dom_validate_ns_guard;
+
+static void dom_validate_ns_guard_begin(dom_validate_ns_guard *guard, xmlDocPtr docp)
+{
+	guard->active = php_dom_follow_spec_node((const xmlNode *) docp);
+	if (guard->active) {
+		zend_hash_init(&guard->links, 0, NULL, NULL, false);
+		xmlNodePtr root_element = xmlDocGetRootElement(docp);
+		if (root_element) {
+			dom_relink_ns_decls(&guard->links, root_element);
+		}
+	}
+}
+
+static void dom_validate_ns_guard_end(dom_validate_ns_guard *guard)
+{
+	if (guard->active) {
+		dom_unlink_ns_decls(&guard->links);
+		zend_hash_destroy(&guard->links);
+	}
 }
 
 /* {{{ Substitutues xincludes in a DomDocument */
@@ -1791,8 +1868,11 @@ PHP_METHOD(DOMDocument, validate)
 	cvp->userData = NULL;
 	cvp->error    = (xmlValidityErrorFunc) php_libxml_error_handler;
 	cvp->warning  = (xmlValidityErrorFunc) php_libxml_error_handler;
-
-	if (xmlValidateDocument(cvp, docp)) {
+	dom_validate_ns_guard guard;
+	dom_validate_ns_guard_begin(&guard, docp);
+	int dtd_valid = xmlValidateDocument(cvp, docp);
+	dom_validate_ns_guard_end(&guard);
+	if (dtd_valid) {
 		RETVAL_TRUE;
 	} else {
 		RETVAL_FALSE;
@@ -1889,7 +1969,10 @@ static void dom_document_schema_validate(INTERNAL_FUNCTION_PARAMETERS, int type)
 	PHP_LIBXML_SANITIZE_GLOBALS(validate);
 	xmlSchemaSetValidOptions(vptr, valid_opts);
 	xmlSchemaSetValidErrors(vptr, php_libxml_error_handler, php_libxml_error_handler, vptr);
+	dom_validate_ns_guard guard;
+	dom_validate_ns_guard_begin(&guard, docp);
 	is_valid = xmlSchemaValidateDoc(vptr, docp);
+	dom_validate_ns_guard_end(&guard);
 	xmlSchemaFree(sptr);
 	xmlSchemaFreeValidCtxt(vptr);
 	PHP_LIBXML_RESTORE_GLOBALS(validate);
@@ -1987,7 +2070,10 @@ static void dom_document_relaxNG_validate(INTERNAL_FUNCTION_PARAMETERS, int type
 	}
 
 	xmlRelaxNGSetValidErrors(vptr, php_libxml_error_handler, php_libxml_error_handler, vptr);
+	dom_validate_ns_guard guard;
+	dom_validate_ns_guard_begin(&guard, docp);
 	is_valid = xmlRelaxNGValidateDoc(vptr, docp);
+	dom_validate_ns_guard_end(&guard);
 	xmlRelaxNGFree(sptr);
 	xmlRelaxNGFreeValidCtxt(vptr);
 

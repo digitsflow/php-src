@@ -41,10 +41,19 @@ static void internal_parse_to_timestamp(IntlDateFormatter_object *dfo, char* tex
 	/* Convert timezone to UTF-16. */
 	intl_convert_utf8_to_utf16(&text_utf16, &text_utf16_len, text_to_parse, text_len, &INTL_DATA_ERROR_CODE(dfo));
 	INTL_METHOD_CHECK_STATUS(dfo, "Error converting timezone to UTF-16" );
+	if (parse_pos && !intl_convert_utf8_offset_to_utf16(text_to_parse, text_len, parse_pos, &INTL_DATA_ERROR_CODE(dfo))) {
+		if (text_utf16) {
+			efree(text_utf16);
+		}
+		INTL_METHOD_CHECK_STATUS(dfo, "Invalid UTF-8 offset" );
+	}
 
 	if (UNEXPECTED(update_calendar)) {
 		UCalendar *parsed_calendar = (UCalendar *)udat_getCalendar(DATE_FORMAT_OBJECT(dfo));
 		udat_parseCalendar(DATE_FORMAT_OBJECT(dfo), parsed_calendar, text_utf16, text_utf16_len, parse_pos, &INTL_DATA_ERROR_CODE(dfo));
+		if (parse_pos) {
+			*parse_pos = intl_convert_utf16_offset_to_utf8(text_utf16, text_utf16_len, *parse_pos);
+		}
 		if (text_utf16) {
 			efree(text_utf16);
 		}
@@ -52,6 +61,9 @@ static void internal_parse_to_timestamp(IntlDateFormatter_object *dfo, char* tex
 		timestamp = ucal_getMillis( parsed_calendar, &INTL_DATA_ERROR_CODE(dfo));
 	} else {
 		timestamp = udat_parse(DATE_FORMAT_OBJECT(dfo), text_utf16, text_utf16_len, parse_pos, &INTL_DATA_ERROR_CODE(dfo));
+		if (parse_pos) {
+			*parse_pos = intl_convert_utf16_offset_to_utf8(text_utf16, text_utf16_len, *parse_pos);
+		}
 		if (text_utf16) {
 			efree(text_utf16);
 		}
@@ -95,9 +107,18 @@ static void internal_parse_to_localtime(IntlDateFormatter_object *dfo, char* tex
 	/* Convert timezone to UTF-16. */
 	intl_convert_utf8_to_utf16(&text_utf16, &text_utf16_len, text_to_parse, text_len, &INTL_DATA_ERROR_CODE(dfo));
 	INTL_METHOD_CHECK_STATUS(dfo, "Error converting timezone to UTF-16" );
+	if (parse_pos && !intl_convert_utf8_offset_to_utf16(text_to_parse, text_len, parse_pos, &INTL_DATA_ERROR_CODE(dfo))) {
+		if (text_utf16) {
+			efree(text_utf16);
+		}
+		INTL_METHOD_CHECK_STATUS(dfo, "Invalid UTF-8 offset" );
+	}
 
 	parsed_calendar = (UCalendar *)udat_getCalendar(DATE_FORMAT_OBJECT(dfo));
 	udat_parseCalendar( DATE_FORMAT_OBJECT(dfo), parsed_calendar, text_utf16, text_utf16_len, parse_pos, &INTL_DATA_ERROR_CODE(dfo));
+	if (parse_pos) {
+		*parse_pos = intl_convert_utf16_offset_to_utf8(text_utf16, text_utf16_len, *parse_pos);
+	}
 
 	if (text_utf16) {
 		efree(text_utf16);
@@ -145,9 +166,9 @@ PHP_FUNCTION(datefmt_parse)
 	DATE_FORMAT_METHOD_FETCH_OBJECT;
 
 	if (z_parse_pos) {
-		zend_long long_parse_pos;
-		ZVAL_DEREF(z_parse_pos);
-		long_parse_pos = zval_get_long(z_parse_pos);
+		zval *z_parse_pos_tmp = z_parse_pos;
+		ZVAL_DEREF(z_parse_pos_tmp);
+		zend_long long_parse_pos = zval_get_long(z_parse_pos_tmp);
 		if (ZEND_LONG_INT_OVFL(long_parse_pos)) {
 			intl_error_set_code(NULL, U_ILLEGAL_ARGUMENT_ERROR);
 			intl_error_set_custom_msg(NULL, "String index is out of valid range.", 0);
@@ -160,8 +181,7 @@ PHP_FUNCTION(datefmt_parse)
 	}
 	internal_parse_to_timestamp( dfo, text_to_parse, text_len, z_parse_pos ? &parse_pos : NULL, false, return_value);
 	if (z_parse_pos) {
-		zval_ptr_dtor(z_parse_pos);
-		ZVAL_LONG(z_parse_pos, parse_pos);
+		ZEND_TRY_ASSIGN_REF_LONG(z_parse_pos, parse_pos);
 	}
 }
 /* }}} */
@@ -186,10 +206,8 @@ PHP_METHOD(IntlDateFormatter, parseToCalendar)
 	DATE_FORMAT_METHOD_FETCH_OBJECT;
 
 	if (z_parse_pos) {
-		zend_long long_parse_pos;
-		ZVAL_DEREF(z_parse_pos);
-		bool failed = false;
-		long_parse_pos = zval_try_get_long(z_parse_pos, &failed);
+		bool failed;
+		zend_long long_parse_pos = zval_try_get_long(z_parse_pos, &failed);
 		if (failed) {
 			zend_argument_type_error(2, "must be of type int, %s given", zend_zval_value_name(z_parse_pos));
 			RETURN_THROWS();
@@ -206,8 +224,7 @@ PHP_METHOD(IntlDateFormatter, parseToCalendar)
 	}
 	internal_parse_to_timestamp( dfo, ZSTR_VAL(text_to_parse), ZSTR_LEN(text_to_parse), z_parse_pos ? &parse_pos : NULL, true, return_value);
 	if (z_parse_pos) {
-		zval_ptr_dtor(z_parse_pos);
-		ZVAL_LONG(z_parse_pos, parse_pos);
+		ZEND_TRY_ASSIGN_REF_LONG(z_parse_pos, parse_pos);
 	}
 }
 
@@ -231,9 +248,9 @@ PHP_FUNCTION(datefmt_localtime)
 	DATE_FORMAT_METHOD_FETCH_OBJECT;
 
 	if (z_parse_pos) {
-		zend_long long_parse_pos;
-		ZVAL_DEREF(z_parse_pos);
-		long_parse_pos = zval_get_long(z_parse_pos);
+		zval *z_parse_pos_tmp = z_parse_pos;
+		ZVAL_DEREF(z_parse_pos_tmp);
+		zend_long long_parse_pos = zval_get_long(z_parse_pos_tmp);
 		if (ZEND_LONG_INT_OVFL(long_parse_pos)) {
 			intl_error_set_code(NULL, U_ILLEGAL_ARGUMENT_ERROR);
 			intl_error_set_custom_msg(NULL, "String index is out of valid range.", 0);
@@ -246,8 +263,7 @@ PHP_FUNCTION(datefmt_localtime)
 	}
 	internal_parse_to_localtime( dfo, text_to_parse, text_len, z_parse_pos?&parse_pos:NULL, return_value);
 	if (z_parse_pos) {
-		zval_ptr_dtor(z_parse_pos);
-		ZVAL_LONG(z_parse_pos, parse_pos);
+		ZEND_TRY_ASSIGN_REF_LONG(z_parse_pos, parse_pos);
 	}
 }
 /* }}} */
