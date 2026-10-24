@@ -2178,8 +2178,7 @@ static void sxe_object_free_storage(zend_object *object)
 	}
 
 	if (sxe->properties) {
-		zend_hash_destroy(sxe->properties);
-		FREE_HASHTABLE(sxe->properties);
+		zend_array_destroy(sxe->properties);
 	}
 }
 /* }}} */
