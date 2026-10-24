@@ -29,15 +29,24 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc make autoconf bison re2c pkg-config \
+          sudo apt-get install -y gcc g++ ccache make autoconf bison re2c pkg-config \
             libxml2-dev libssl-dev libsqlite3-dev zlib1g-dev libcurl4-openssl-dev \
             libonig-dev libzip-dev libsystemd-dev libicu-dev
+
+      - name: Configure Compiler Cache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: "security-gate-asan-x86_64"
+          append-timestamp: false
+          save: true
 
       - name: Regenerate Build System
         run: ./buildconf --force
 
       - name: Configure with ASAN & UBSAN
         env:
+          CC: "ccache gcc"
+          CXX: "ccache g++"
           CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -g -O1 -DZEND_TRACK_ARENA_ALLOC -Wno-deprecated-declarations"
           LDFLAGS: "-fsanitize=address,undefined"
         run: |
