@@ -51,6 +51,7 @@ jobs:
             --with-gettext \
             --enable-exif \
             --enable-soap \
+            --enable-mbstring \
             --enable-opcache \
             --with-openssl \
             --with-zlib
