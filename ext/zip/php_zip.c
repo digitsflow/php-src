@@ -306,6 +306,7 @@ static int php_zip_extract_file(struct zip * za, char *dest, const char *file, s
 		}
 		php_stream_close(stream);
 		zip_fclose(zf);
+		VCWD_UNLINK(fullpath);
 		goto done;
 	}
 
@@ -318,6 +319,9 @@ static int php_zip_extract_file(struct zip * za, char *dest, const char *file, s
 
 	php_stream_close(stream);
 	n = zip_fclose(zf) == 0 ? 0 : -1;
+	if (n < 0) {
+		VCWD_UNLINK(fullpath);
+	}
 
 done:
 	efree(fullpath);
