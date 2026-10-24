@@ -130,6 +130,73 @@ jobs:
         run: |
           sapi/cli/php -v
 
+  LINUX_AARCH64:
+    name: LINUX_AARCH64_DEBUG_ZTS
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v4
+      - name: apt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ccache autoconf bison re2c pkg-config \
+            libxml2-dev libssl-dev libsqlite3-dev zlib1g-dev \
+            libcurl4-openssl-dev libonig-dev libzip-dev libffi-dev
+      - name: System info
+        run: |
+          lscpu
+          uname -a
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: "LINUX_AARCH64_DEBUG_ZTS"
+          append-timestamp: false
+          save: true
+      - name: ./configure
+        run: |
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          export CFLAGS="-O2 -Wno-deprecated-declarations"
+          ./buildconf --force
+          ./configure \
+            --enable-debug \
+            --enable-zts \
+            --disable-all \
+            --enable-cli \
+            --enable-opcache \
+            --enable-session \
+            --with-ffi \
+            --with-libxml \
+            --with-openssl \
+            --with-zlib \
+            --with-zip
+      - name: make
+        run: make -j$(/usr/bin/nproc) >/dev/null
+      - name: make install
+        run: sudo make install
+      - name: Test Tracing JIT (AArch64)
+        run: |
+          TESTS=""
+          for t in \
+            ext/zip/tests/gh23240_cleanup.phpt \
+            ext/session/tests/mod_user_create_sid_null.phpt \
+            ext/standard/tests/strings/gh23204_frameless.phpt \
+            ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
+            ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
+            ext/session/tests/gh24376_session_cloexec.phpt \
+            ext/opcache/tests/jit/aarch64_ir_patch_and_veneer_safety.phpt; do
+            if [ -f "$t" ]; then
+              TESTS="$TESTS $t"
+            fi
+          done
+          sapi/cli/php run-tests.php -P -q --show-diff \
+            -d opcache.enable=1 \
+            -d opcache.enable_cli=1 \
+            -d opcache.jit=tracing \
+            -d opcache.jit_buffer_size=32M \
+            $TESTS
+
   LINUX_X32:
     name: LINUX_X32_DEBUG_ZTS
     runs-on: ubuntu-24.04
@@ -353,12 +420,20 @@ jobs:
     steps:
       - name: git checkout
         uses: actions/checkout@v4
-      - name: FreeBSD Compatibility & POSIX Build Verification
+      - name: apt
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential clang ccache autoconf bison re2c pkg-config \
             libxml2-dev libssl-dev zlib1g-dev
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: "FREEBSD"
+          append-timestamp: false
+          save: true
+      - name: FreeBSD Compatibility & POSIX Build Verification
+        run: |
           export CC="ccache clang"
           export CXX="ccache clang++"
           export CFLAGS="-O2 -Wno-deprecated-declarations"
