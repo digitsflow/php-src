@@ -3030,7 +3030,7 @@ static int zend_jit_patch(const void *code, size_t size, uint32_t jmp_table_size
 	}
 
 	end = (uint8_t*)code;
-	p = end + size;
+	p = end + (size & ~(size_t)3);
 	while (p > end) {
 		uint32_t *ins_ptr;
 		uint32_t ins;
@@ -3041,7 +3041,7 @@ static int zend_jit_patch(const void *code, size_t size, uint32_t jmp_table_size
 		if ((ins & 0xfc000000u) == 0x14000000u) {
 			// B (imm26:0..25)
 			delta = (uint32_t*)from_addr - ins_ptr;
-			if (((ins ^ (uint32_t)delta) & 0x01ffffffu) == 0) {
+			if (((ins ^ (uint32_t)delta) & 0x03ffffffu) == 0) {
 				delta = (uint32_t*)to_addr - ins_ptr;
 				if (((delta + 0x02000000) >> 26) != 0) {
 					abort(); // brnach target out of range
