@@ -24,14 +24,14 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 10
 
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc g++ ccache make autoconf bison re2c pkg-config \
-            libxml2-dev libssl-dev libsqlite3-dev zlib1g-dev libcurl4-openssl-dev \
-            libonig-dev libzip-dev libsystemd-dev libicu-dev
+            libxml2-dev libxslt1-dev libssl-dev libsqlite3-dev zlib1g-dev libcurl4-openssl-dev \
+            libonig-dev libzip-dev libsystemd-dev libicu-dev libffi-dev
 
       - name: Configure Compiler Cache
         uses: hendrikmuhs/ccache-action@v1.2
@@ -70,6 +70,11 @@ jobs:
             --enable-pcntl \
             --enable-posix \
             --enable-sockets \
+            --enable-pdo \
+            --with-pdo-sqlite \
+            --with-ffi \
+            --with-mhash \
+            --with-xsl \
             --with-openssl \
             --with-zlib
 
@@ -81,25 +86,40 @@ jobs:
           ASAN_OPTIONS: "detect_leaks=1:abort_on_error=1:allocator_may_return_null=1"
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: |
-          CHANGED_TESTS=$(git diff --name-only HEAD~1 HEAD | grep '\.phpt$' || true)
-          if [ -n "$CHANGED_TESTS" ]; then
-            echo "Running PR regression test suite under ASAN:"
+          CHANGED_TESTS=$(git diff --name-only --diff-filter=ACMR HEAD~1 HEAD | grep '\.phpt$' || true)
+          CHANGED_COUNT=$(printf "%s\n" "$CHANGED_TESTS" | sed '/^$/d' | wc -l | tr -d ' ')
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ -n "$CHANGED_TESTS" ] && [ "$CHANGED_COUNT" -le 25 ]; then
+            echo "Running PR regression test suite under ASAN ($CHANGED_COUNT tests):"
             echo "$CHANGED_TESTS"
             sapi/cli/php run-tests.php -P -q --show-diff -d extension_dir=$PWD/modules $CHANGED_TESTS
           else
             TESTS=""
             for t in \
-              ext/zip/tests/gh23240_cleanup.phpt \
+              Zend/tests/gh21776.phpt \
+              ext/exif/tests/gh23807.phpt \
+              ext/ffi/tests/finalize_type_bailout_leak.phpt \
+              ext/ffi/tests/spprintf_ps_null_and_zeropad.phpt \
+              ext/hash/tests/gh23950.phpt \
+              ext/pdo/tests/pdo_fetch_both_column_count_overflow.phpt \
+              ext/session/tests/gh24376_session_cloexec.phpt \
               ext/session/tests/mod_user_create_sid_null.phpt \
+              ext/soap/tests/gh23771.phpt \
+              ext/soap/tests/gh23771_invalid.phpt \
+              ext/soap/tests/gh23771_valid.phpt \
+              ext/spl/tests/spl_file_info_get_link_target_uninit.phpt \
+              ext/standard/tests/http/http_response_header_nested_request.phpt \
               ext/standard/tests/strings/gh23204_frameless.phpt \
-              ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
               ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
-              ext/session/tests/gh24376_session_cloexec.phpt; do
+              ext/xsl/tests/gh23199_destruct.phpt \
+              ext/zip/tests/gh23240_cleanup.phpt \
+              ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt; do
               if [ -f "$t" ]; then
                 TESTS="$TESTS $t"
               fi
             done
             if [ -n "$TESTS" ]; then
+              echo "Running Digitsflow Security & Sanitizer Regression Suite under ASAN:"
+              echo "$TESTS"
               sapi/cli/php run-tests.php -P -q --show-diff -d extension_dir=$PWD/modules $TESTS
             fi
           fi

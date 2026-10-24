@@ -1273,11 +1273,11 @@ PHP_METHOD(SplFileInfo, getLinkTarget)
 			RETURN_THROWS();
 		}
 	}
-#if defined(PHP_WIN32) || defined(HAVE_SYMLINK)
 	if (intern->file_name == NULL) {
 		zend_value_error("Filename cannot be empty");
 		RETURN_THROWS();
 	}
+#if defined(PHP_WIN32) || defined(HAVE_SYMLINK)
 	if (!IS_ABSOLUTE_PATH(ZSTR_VAL(intern->file_name), ZSTR_LEN(intern->file_name))) {
 		char expanded_path[MAXPATHLEN];
 		if (!expand_filepath_with_mode(ZSTR_VAL(intern->file_name), expanded_path, NULL, 0, CWD_EXPAND )) {
@@ -1293,7 +1293,7 @@ PHP_METHOD(SplFileInfo, getLinkTarget)
 #endif
 
 	if (ret == -1) {
-		zend_throw_exception_ex(spl_ce_RuntimeException, 0, "Unable to read link %s, error: %s", ZSTR_VAL(intern->file_name), strerror(errno));
+		zend_throw_exception_ex(spl_ce_RuntimeException, 0, "Unable to read link %pS, error: %s", intern->file_name, strerror(errno));
 		RETVAL_FALSE;
 	} else {
 		/* Append NULL to the end of the string */
