@@ -123,14 +123,14 @@ static zend_always_inline char encode(char c) {
 /* Look two letters down.  It makes sure you don't walk off the string. */
 #define Read_After_Next_Letter	(Read_Raw_Next_Letter != '\0' ? Convert_Raw(word[w_idx+2]) \
 											     : '\0')
-#define Look_Ahead_Letter(n) (toupper(Lookahead((char *) word+w_idx, n)))
+#define Look_Ahead_Letter(n) (toupper((unsigned char)Lookahead((char *) word+w_idx, n)))
 
 
 /* Allows us to safely look ahead an arbitrary # of letters */
 /* I probably could have just used strlen... */
-static char Lookahead(char *word, int how_far)
+static char Lookahead(char *word, size_t how_far)
 {
-	int idx;
+	size_t idx;
 	for (idx = 0; word[idx] != '\0' && idx < how_far; idx++);
 	/* Edge forward in the string... */
 
@@ -170,7 +170,7 @@ static char Lookahead(char *word, int how_far)
 /* {{{ metaphone */
 static void metaphone(unsigned char *word, size_t word_len, zend_long max_phonemes, zend_string **phoned_word, int traditional)
 {
-	int w_idx = 0;				/* point in the phonization we're at. */
+	size_t w_idx = 0;				/* point in the phonization we're at. */
 	size_t p_idx = 0;				/* end of the phoned phrase */
 	size_t max_buffer_len = 0;		/* maximum length of the destination buffer */
 	char curr_letter;
