@@ -1187,11 +1187,11 @@ PHP_METHOD(SplFileInfo, getLinkTarget)
 			RETURN_THROWS();
 		}
 	}
-#if defined(PHP_WIN32) || defined(HAVE_SYMLINK)
 	if (intern->file_name == NULL) {
 		zend_value_error("Filename must not be empty");
 		RETURN_THROWS();
 	}
+#if defined(PHP_WIN32) || defined(HAVE_SYMLINK)
 	if (!IS_ABSOLUTE_PATH(ZSTR_VAL(intern->file_name), ZSTR_LEN(intern->file_name))) {
 		char expanded_path[MAXPATHLEN];
 		if (!expand_filepath_with_mode(ZSTR_VAL(intern->file_name), expanded_path, NULL, 0, CWD_EXPAND )) {
