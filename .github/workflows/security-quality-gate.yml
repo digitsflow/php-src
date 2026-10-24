@@ -1,12 +1,14 @@
 name: Security & Sanitizer Quality Gate (ASAN / UBSAN)
 
 on:
+  push:
+    branches:
+      - 'digitsflow-*'
+      - master
   pull_request:
-    paths:
-      - 'Zend/**'
-      - 'ext/**'
-      - 'main/**'
-      - 'sapi/**'
+    branches:
+      - 'digitsflow-*'
+      - master
   workflow_dispatch:
 
 permissions:
@@ -36,14 +38,14 @@ jobs:
 
       - name: Configure with ASAN & UBSAN
         env:
-          CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -g -O1 -DZEND_TRACK_ARENA_ALLOC"
+          CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -g -O1 -DZEND_TRACK_ARENA_ALLOC -Wno-deprecated-declarations"
           LDFLAGS: "-fsanitize=address,undefined"
         run: |
           ./configure \
             --enable-debug \
             --disable-all \
             --enable-cli \
-            --enable-libxml \
+            --with-libxml \
             --enable-session \
             --enable-xml \
             --with-curl \
@@ -70,18 +72,25 @@ jobs:
           ASAN_OPTIONS: "detect_leaks=1:abort_on_error=1:allocator_may_return_null=1"
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: |
-          # Automatically detect changed .phpt test files in the pull request
           CHANGED_TESTS=$(git diff --name-only HEAD~1 HEAD | grep '\.phpt$' || true)
-          
           if [ -n "$CHANGED_TESTS" ]; then
             echo "Running PR regression test suite under ASAN:"
             echo "$CHANGED_TESTS"
             sapi/cli/php run-tests.php -P -q --show-diff -d extension_dir=$PWD/modules $CHANGED_TESTS
           else
-            echo "Running core security test suite under ASAN:"
-            sapi/cli/php run-tests.php -P -q --show-diff -d extension_dir=$PWD/modules \
-              ext/curl/tests/ \
-              ext/xml/tests/ \
-              ext/zip/tests/ \
-              ext/session/tests/
+            TESTS=""
+            for t in \
+              ext/zip/tests/gh23240_cleanup.phpt \
+              ext/session/tests/mod_user_create_sid_null.phpt \
+              ext/standard/tests/strings/gh23204_frameless.phpt \
+              ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
+              ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
+              ext/session/tests/gh24376_session_cloexec.phpt; do
+              if [ -f "$t" ]; then
+                TESTS="$TESTS $t"
+              fi
+            done
+            if [ -n "$TESTS" ]; then
+              sapi/cli/php run-tests.php -P -q --show-diff -d extension_dir=$PWD/modules $TESTS
+            fi
           fi

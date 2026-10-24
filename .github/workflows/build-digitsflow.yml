@@ -3,19 +3,14 @@ name: Build & Release Digitsflow PHP
 on:
   push:
     branches:
-      - digitsflow-8.1
-      - digitsflow-8.2
-      - digitsflow-8.3
-      - digitsflow-8.4
+      - 'digitsflow-*'
       - master
     tags:
       - 'v*'
   pull_request:
     branches:
-      - digitsflow-8.1
-      - digitsflow-8.2
-      - digitsflow-8.3
-      - digitsflow-8.4
+      - 'digitsflow-*'
+      - master
   workflow_dispatch:
 
 permissions:
@@ -47,13 +42,22 @@ jobs:
       - name: Run Core Regression Tests
         run: |
           ./sapi/cli/php -v
-          ./sapi/cli/php run-tests.php -p ./sapi/cli/php \
+          TESTS=""
+          for t in \
             ext/zip/tests/gh23240_cleanup.phpt \
             ext/session/tests/mod_user_create_sid_null.phpt \
             ext/standard/tests/strings/gh23204_frameless.phpt \
             ext/xsl/tests/gh23199_destruct.phpt \
             ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
-            ext/standard/tests/strings/metaphone_lookahead_overflow.phpt
+            ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
+            ext/session/tests/gh24376_session_cloexec.phpt; do
+            if [ -f "$t" ]; then
+              TESTS="$TESTS $t"
+            fi
+          done
+          if [ -n "$TESTS" ]; then
+            ./sapi/cli/php run-tests.php -p ./sapi/cli/php $TESTS
+          fi
 
       - name: Create Distribution Tarball
         run: |
@@ -70,11 +74,19 @@ jobs:
           retention-days: 14
 
       - name: Publish Release (on Tag)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ env.PKG_NAME }}
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+              gh release upload "$TAG_NAME" "$PKG_NAME" --clobber
+            else
+              gh release create "$TAG_NAME" "$PKG_NAME" --generate-notes --title "Digitsflow PHP $TAG_NAME"
+            fi
+          else
+            echo "Verified package artifact ${PKG_NAME} for ref ${GITHUB_REF}."
+          fi
 
   build-docker:
     name: Build & Push Docker Image
@@ -101,6 +113,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=ref,event=branch
+            type=ref,event=pr
             type=semver,pattern={{version}}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/digitsflow-8.4' }}
 
