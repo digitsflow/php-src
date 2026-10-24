@@ -69,10 +69,10 @@ jobs:
           if [ -n "$CHANGED_TESTS" ]; then
             echo "Running PR regression test suite under ASAN:"
             echo "$CHANGED_TESTS"
-            sapi/cli/php run-tests.php -P -q --show-diff $CHANGED_TESTS
+            sapi/cli/php run-tests.php -P -q --show-diff -d extension_dir=$PWD/modules $CHANGED_TESTS
           else
             echo "Running core security test suite under ASAN:"
-            sapi/cli/php run-tests.php -P -q --show-diff \
+            sapi/cli/php run-tests.php -P -q --show-diff -d extension_dir=$PWD/modules \
               ext/curl/tests/ \
               ext/xml/tests/ \
               ext/zip/tests/ \
