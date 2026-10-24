@@ -247,6 +247,7 @@ Digitsflow maintains proactive backports and fixes for critical vulnerabilities 
 | **GH-24508/9**| `ext/standard`| HTTP stream wrapper memory leaks on empty Location / chunk error | 8.1, 8.2, 8.3, 8.4, 8.7-dev |
 | **GH-17921** | `ext/sockets` | Signed integer overflow on buffer size in `socket_read`/`socket_recv` | 8.1, 8.2, 8.3, 8.4, 8.7-dev |
 | **GH-23334** | `ext/dom` | `php_dom_free_templated_content()` Heap-Use-After-Free | 8.4, 8.7-dev |
+| **GH-24176** | `ext/zlib` | Use-After-Free when error handler removes failing `zlib.inflate` filter | 8.1, 8.2, 8.3, 8.4, 8.7-dev |
 
 ---
 
