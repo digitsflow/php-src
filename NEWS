@@ -208,6 +208,8 @@ PHP                                                                        NEWS
   . Fix crashes in function registration + test. (nielsdos, Girgias)
 
 - Session:
+  . Fixed bug GH-24376 (Race condition causing session file descriptor leak
+    without O_CLOEXEC). (CVE-2026-8192) (Digitsflow)
   . Fix type confusion with session SID constant. (nielsdos)
   . Fixed bug GH-17541 (ext/session NULL pointer dereferencement during
     ID reset). (Girgias)
