@@ -370,12 +370,34 @@ static void xbuf_format_converter(void *xbuf, bool is_char, const char *fmt, va_
 			switch (*fmt) {
 				case 'Z': {
 					zval *zvp = va_arg(ap, zval*);
-					zend_string *str = zval_get_tmp_string(zvp, &tmp_str);
-					s_len = ZSTR_LEN(str);
-					s = ZSTR_VAL(str);
-					if (adjust_precision && (size_t)precision < s_len) {
-						s_len = precision;
+					if (EXPECTED(zvp != NULL)) {
+						zend_string *str = zval_get_tmp_string(zvp, &tmp_str);
+						s_len = ZSTR_LEN(str);
+						s = ZSTR_VAL(str);
+						if (adjust_precision && (size_t)precision < s_len) {
+							s_len = precision;
+						}
+					} else {
+						s = S_NULL;
+						s_len = S_NULL_LEN;
 					}
+					pad_char = ' ';
+					break;
+				}
+				case 'S': {
+format_zend_string:;
+					zend_string *str = va_arg(ap, zend_string*);
+					if (EXPECTED(str != NULL)) {
+						s_len = ZSTR_LEN(str);
+						s = ZSTR_VAL(str);
+						if (adjust_precision && (size_t)precision < s_len) {
+							s_len = precision;
+						}
+					} else {
+						s = S_NULL;
+						s_len = S_NULL_LEN;
+					}
+					pad_char = ' ';
 					break;
 				}
 				case 'u':
@@ -693,6 +715,24 @@ static void xbuf_format_converter(void *xbuf, bool is_char, const char *fmt, va_
 					 * we print "%p" to indicate that we don't handle "%p".
 					 */
 				case 'p':
+					/* %p[alnum]+ extensions */
+					switch (*(fmt+1)) {
+						case 'S':
+							/* zend_string* */
+							fmt++;
+							goto format_zend_string;
+						case 'p':
+							/* pointer */
+							fmt++;
+							break;
+						default:
+							if (isalnum((unsigned char)*(fmt+1))) {
+								zend_error_noreturn(E_CORE_ERROR,
+									"Invalid printf specifier \"p%c\"", *(fmt+1));
+							}
+							break;
+					}
+					/* Normal %p */
 					if (sizeof(char *) <= sizeof(uint64_t)) {
 						ui_num = (uint64_t)((size_t) va_arg(ap, char *));
 						s = ap_php_conv_p2(ui_num, 4, 'x',
