@@ -16,14 +16,14 @@ foreach ([2**31, 2**32, 2**32 + 16, PHP_INT_MAX] as $length) {
 }
 ?>
 --EXPECTF--
-Deprecated: Function mhash_keygen_s2k() is deprecated since 8.1 in %s on line %d
+Deprecated: Function mhash_keygen_s2k() is deprecated%S in %s on line %d
 ValueError: mhash_keygen_s2k(): Argument #4 ($length) must be less than or equal to 2147483647
 
-Deprecated: Function mhash_keygen_s2k() is deprecated since 8.1 in %s on line %d
+Deprecated: Function mhash_keygen_s2k() is deprecated%S in %s on line %d
 ValueError: mhash_keygen_s2k(): Argument #4 ($length) must be less than or equal to 2147483647
 
-Deprecated: Function mhash_keygen_s2k() is deprecated since 8.1 in %s on line %d
+Deprecated: Function mhash_keygen_s2k() is deprecated%S in %s on line %d
 ValueError: mhash_keygen_s2k(): Argument #4 ($length) must be less than or equal to 2147483647
 
-Deprecated: Function mhash_keygen_s2k() is deprecated since 8.1 in %s on line %d
+Deprecated: Function mhash_keygen_s2k() is deprecated%S in %s on line %d
 ValueError: mhash_keygen_s2k(): Argument #4 ($length) must be less than or equal to 2147483647

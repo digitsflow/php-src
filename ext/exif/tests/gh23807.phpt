@@ -23,7 +23,7 @@ var_dump(exif_read_data($tmp));
 @unlink($tmp);
 ?>
 --EXPECTF--
-Warning: exif_read_data(%s): Read from TIFF: entry length of 8589934592 exceeds INT32_MAX in %s on line %d
+Warning: exif_read_data(%S): Read from TIFF: entry length of 8589934592 exceeds INT32_MAX in %s on line %d
 
-Warning: exif_read_data(%s): Invalid TIFF file in %s on line %d
+Warning: exif_read_data(%S): Invalid TIFF file in %s on line %d
 bool(false)
