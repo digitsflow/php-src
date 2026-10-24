@@ -57,6 +57,7 @@ jobs:
             --enable-opcache \
             --enable-ftp \
             --enable-pcntl \
+            --enable-posix \
             --with-openssl \
             --with-zlib
 
