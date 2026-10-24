@@ -177,17 +177,21 @@ static void ps_files_open(ps_files *data, /* const */ zend_string *key)
 
 		data->last_key = zend_string_copy(key);
 
-		/* O_NOFOLLOW to prevent us from following evil symlinks */
+		int open_flags = O_CREAT | O_RDWR | O_BINARY;
 #ifdef O_NOFOLLOW
-		data->fd = VCWD_OPEN_MODE(buf, O_CREAT | O_RDWR | O_BINARY | O_NOFOLLOW, data->filemode);
-#else
+		open_flags |= O_NOFOLLOW;
+#endif
+#ifdef O_CLOEXEC
+		open_flags |= O_CLOEXEC;
+#endif
+#ifndef O_NOFOLLOW
 		/* Check to make sure that the opened file is not outside of allowable dirs.
 		   This is not 100% safe but it's hard to do something better without O_NOFOLLOW */
 		if(PG(open_basedir) && lstat(buf, &sbuf) == 0 && S_ISLNK(sbuf.st_mode) && php_check_open_basedir(buf)) {
 			return;
 		}
-		data->fd = VCWD_OPEN_MODE(buf, O_CREAT | O_RDWR | O_BINARY, data->filemode);
 #endif
+		data->fd = VCWD_OPEN_MODE(buf, open_flags, data->filemode);
 
 		if (data->fd != -1) {
 #ifndef PHP_WIN32
@@ -675,10 +679,8 @@ PS_CREATE_SID_FUNC(files)
 		/* Check collision */
 		/* FIXME: mod_data(data) should not be NULL (User handler could be NULL) */
 		if (data && ps_files_key_exists(data, sid) == SUCCESS) {
-			if (sid) {
-				zend_string_release_ex(sid, 0);
-				sid = NULL;
-			}
+			zend_string_release_ex(sid, 0);
+			sid = NULL;
 			if (--maxfail < 0) {
 				return NULL;
 			}
