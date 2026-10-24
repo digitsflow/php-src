@@ -53,6 +53,7 @@ jobs:
             --enable-soap \
             --enable-mbstring \
             --enable-simplexml \
+            --enable-dom \
             --enable-opcache \
             --with-openssl \
             --with-zlib
