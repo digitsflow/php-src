@@ -178,7 +178,7 @@ static int ir_patch_code(const void *code, size_t size, const void *from_addr, c
 	ptrdiff_t delta;
 
 	end = (uint8_t*)code;
-	p = end + size;
+	p = end + (size & ~(size_t)3);
 	while (p > end) {
 		uint32_t *ins_ptr;
 		uint32_t ins;
@@ -189,7 +189,7 @@ static int ir_patch_code(const void *code, size_t size, const void *from_addr, c
 		if ((ins & 0xfc000000u) == 0x14000000u) {
 			// B (imm26:0..25)
 			delta = (uint32_t*)from_addr - ins_ptr;
-			if (((ins ^ (uint32_t)delta) & 0x01ffffffu) == 0) {
+			if (((ins ^ (uint32_t)delta) & 0x03ffffffu) == 0) {
 				delta = (uint32_t*)to_addr - ins_ptr;
 				if (((delta + 0x02000000) >> 26) != 0) {
 					abort(); // branch target out of range

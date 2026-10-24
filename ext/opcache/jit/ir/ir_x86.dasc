@@ -26927,8 +26927,10 @@ next_block:;
 	}
 	size = *size_ptr;
 
+	void *orig_pos = NULL;
 	if (ctx->code_buffer) {
-		entry = ctx->code_buffer->pos;
+		orig_pos = ctx->code_buffer->pos;
+		entry = orig_pos;
 		entry = (void*)IR_ALIGNED_SIZE(((size_t)(entry)), required_alignment);
 		if (size > (size_t)((char*)ctx->code_buffer->end - (char*)entry)) {
 			ctx->data = NULL;
@@ -26952,10 +26954,8 @@ next_block:;
 		IR_ASSERT(0);
 		dasm_free(&data.dasm_state);
 		if (ctx->code_buffer) {
-			if (ctx->code_buffer->pos == (char*)entry + size) {
-				/* rollback */
-				ctx->code_buffer->pos = (char*)entry - size;
-			}
+			/* rollback */
+			ctx->code_buffer->pos = orig_pos;
 		} else {
 			ir_mem_unmap(entry, size);
 		}
@@ -27067,8 +27067,8 @@ const void *ir_emit_exitgroup(uint32_t first_exit_point, uint32_t exit_points_pe
 		return NULL;
 	}
 
-	entry = code_buffer->pos;
-	entry = (void*)IR_ALIGNED_SIZE(((size_t)(entry)), 16);
+	void *orig_pos = code_buffer->pos;
+	entry = (void*)IR_ALIGNED_SIZE(((size_t)(orig_pos)), 16);
 	if (size > (size_t)((char*)code_buffer->end - (char*)entry)) {
 		return NULL;
 	}
@@ -27078,10 +27078,8 @@ const void *ir_emit_exitgroup(uint32_t first_exit_point, uint32_t exit_points_pe
 	if (ret != DASM_S_OK) {
 		IR_ASSERT(0);
 		dasm_free(&dasm_state);
-		if (code_buffer->pos == (char*)entry + size) {
-			/* rollback */
-			code_buffer->pos = (char*)entry - size;
-		}
+		/* rollback */
+		code_buffer->pos = orig_pos;
 		return NULL;
 	}
 
