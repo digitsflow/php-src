@@ -123,10 +123,7 @@ static char Lookahead(char *word, size_t how_far)
 	for (idx = 0; word[idx] != '\0' && idx < how_far; idx++);
 	/* Edge forward in the string... */
 
-	letter_ahead = word[idx];	/* idx will be either == to how_far or
-								 * at the end of the string
-								 */
-	return letter_ahead;
+	return word[idx];
 }
 
 
