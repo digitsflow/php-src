@@ -35,9 +35,10 @@ jobs:
 
       - name: Install Build Dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/*pgdg* /etc/apt/sources.list.d/*postgresql* || true
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential ccache autoconf bison re2c pkg-config \
+          sudo apt-get install -y --no-install-recommends --allow-downgrades \
+            build-essential ccache autoconf bison re2c pkg-config patchelf \
             libxml2-dev libssl-dev libzip-dev libpq-dev \
             libcurl4-openssl-dev libonig-dev libsqlite3-dev zlib1g-dev \
             libsystemd-dev libicu-dev
@@ -70,7 +71,8 @@ jobs:
             ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
             ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
             ext/session/tests/gh24376_session_cloexec.phpt \
-            ext/opcache/tests/jit/aarch64_ir_patch_and_veneer_safety.phpt; do
+            ext/opcache/tests/jit/aarch64_ir_patch_and_veneer_safety.phpt \
+            ext/pdo_pgsql/tests/libpq_symbol_portability.phpt; do
             if [ -f "$t" ]; then
               TESTS="$TESTS $t"
             fi
@@ -85,6 +87,23 @@ jobs:
           PKG_NAME="php-digitsflow-${REF_CLEAN}-linux-${{ matrix.arch }}.tar.gz"
           tar -czvf "$PKG_NAME" -C /tmp/digitsflow-pkg .
           echo "PKG_NAME=$PKG_NAME" >> "$GITHUB_ENV"
+
+      - name: Verify Packaged Tarball & Symbol Portability
+        run: |
+          VERIFY_DIR=$(mktemp -d /tmp/verify-pkg-XXXXXX)
+          tar -xzf "$PKG_NAME" -C "$VERIFY_DIR"
+          test -x "$VERIFY_DIR/opt/digitsflow/php/bin/php-digitsflow"
+          test -x "$VERIFY_DIR/opt/digitsflow/php/sbin/php-fpm-digitsflow"
+          test -f "$VERIFY_DIR/opt/digitsflow/php/lib/libpq.so.5"
+          if nm -D --undefined-only "$VERIFY_DIR/opt/digitsflow/php/bin/php-digitsflow" | grep -E 'PQclosePortal|PQclosePrepared|PQsetChunkedRowsMode|PQchangePassword|PQsocketPoll'; then
+            echo "ERROR: Unversioned PostgreSQL 17+ symbol found in php-digitsflow dynamic symbol table!"
+            exit 1
+          fi
+          sudo tar -xzf "$PKG_NAME" -C /
+          /opt/digitsflow/php/bin/php-digitsflow -v
+          /opt/digitsflow/php/sbin/php-fpm-digitsflow -v
+          ldd /opt/digitsflow/php/bin/php-digitsflow | grep "/opt/digitsflow/php/lib/libpq.so.5"
+          rm -rf "$VERIFY_DIR"
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
