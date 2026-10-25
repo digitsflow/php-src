@@ -88,22 +88,42 @@ jobs:
           tar -czvf "$PKG_NAME" -C /tmp/digitsflow-pkg .
           echo "PKG_NAME=$PKG_NAME" >> "$GITHUB_ENV"
 
-      - name: Verify Packaged Tarball & Symbol Portability
+      - name: Pre-Release Gate - ELF Symbol Audit & Clean-OS Container Install Test
         run: |
           VERIFY_DIR=$(mktemp -d /tmp/verify-pkg-XXXXXX)
           tar -xzf "$PKG_NAME" -C "$VERIFY_DIR"
           test -x "$VERIFY_DIR/opt/digitsflow/php/bin/php-digitsflow"
           test -x "$VERIFY_DIR/opt/digitsflow/php/sbin/php-fpm-digitsflow"
           test -f "$VERIFY_DIR/opt/digitsflow/php/lib/libpq.so.5"
+          test "$(patchelf --print-rpath "$VERIFY_DIR/opt/digitsflow/php/bin/php-digitsflow")" = "/opt/digitsflow/php/lib"
+          test "$(patchelf --print-rpath "$VERIFY_DIR/opt/digitsflow/php/sbin/php-fpm-digitsflow")" = "/opt/digitsflow/php/lib"
           if nm -D --undefined-only "$VERIFY_DIR/opt/digitsflow/php/bin/php-digitsflow" | grep -E 'PQclosePortal|PQclosePrepared|PQsetChunkedRowsMode|PQchangePassword|PQsocketPoll'; then
             echo "ERROR: Unversioned PostgreSQL 17+ symbol found in php-digitsflow dynamic symbol table!"
             exit 1
           fi
-          sudo tar -xzf "$PKG_NAME" -C /
-          /opt/digitsflow/php/bin/php-digitsflow -v
-          /opt/digitsflow/php/sbin/php-fpm-digitsflow -v
-          ldd /opt/digitsflow/php/bin/php-digitsflow | grep "/opt/digitsflow/php/lib/libpq.so.5"
           rm -rf "$VERIFY_DIR"
+
+          echo "--> Running isolated Clean-OS Container Install & Relocation Gate (ubuntu:24.04)..."
+          chmod +x packaging/scripts/install.sh
+          docker run --rm \
+            -v "$PWD:/work:ro" \
+            -e LOCAL_TARBALL="/work/${PKG_NAME}" \
+            ubuntu:24.04 bash -euxc '
+              /work/packaging/scripts/install.sh
+              if ldd -r /opt/digitsflow/php/bin/php-digitsflow 2>&1 | grep -E "not found|undefined symbol"; then
+                echo "ERROR: Unresolved shared library or symbol in php-digitsflow inside bare ubuntu:24.04!"
+                exit 1
+              fi
+              if ldd -r /opt/digitsflow/php/sbin/php-fpm-digitsflow 2>&1 | grep -E "not found|undefined symbol"; then
+                echo "ERROR: Unresolved shared library or symbol in php-fpm-digitsflow inside bare ubuntu:24.04!"
+                exit 1
+              fi
+              ldd /opt/digitsflow/php/bin/php-digitsflow | grep "/opt/digitsflow/php/lib/libpq.so.5"
+              LD_BIND_NOW=1 /usr/local/bin/php -v
+              LD_BIND_NOW=1 /usr/local/bin/php -m
+              LD_BIND_NOW=1 /usr/local/bin/php -r "echo \"CLEAN_CONTAINER_GATE_OK\n\";" | grep -q "CLEAN_CONTAINER_GATE_OK"
+              LD_BIND_NOW=1 /usr/local/bin/php-fpm -v
+            '
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
@@ -111,20 +131,6 @@ jobs:
           name: php-digitsflow-${{ matrix.arch }}
           path: ${{ env.PKG_NAME }}
           retention-days: 14
-
-      - name: Publish Release (on Tag)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            TAG_NAME="${GITHUB_REF#refs/tags/}"
-            if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-              gh release create "$TAG_NAME" --generate-notes --title "Digitsflow PHP $TAG_NAME" || true
-            fi
-            gh release upload "$TAG_NAME" "$PKG_NAME" --clobber
-          else
-            echo "Verified package artifact ${PKG_NAME} (${{ matrix.arch }}) for ref ${GITHUB_REF}."
-          fi
 
   build-docker:
     name: Build & Push Multi-Arch Docker Image (x86_64 & aarch64)
@@ -141,6 +147,8 @@ jobs:
           mkdir -p /tmp/docker-ctx/pkg-root-amd64 /tmp/docker-ctx/pkg-root-arm64
           TARBALL_X64=$(find /tmp/artifacts -type f -name "php-digitsflow-*-linux-x86_64.tar.gz" | head -n 1)
           TARBALL_ARM64=$(find /tmp/artifacts -type f -name "php-digitsflow-*-linux-aarch64.tar.gz" | head -n 1)
+          echo "TARBALL_X64=$TARBALL_X64" >> "$GITHUB_ENV"
+          echo "TARBALL_ARM64=$TARBALL_ARM64" >> "$GITHUB_ENV"
           tar -xzf "$TARBALL_X64" -C /tmp/docker-ctx/pkg-root-amd64
           tar -xzf "$TARBALL_ARM64" -C /tmp/docker-ctx/pkg-root-arm64
           cat > /tmp/docker-ctx/Dockerfile <<'EOF'
@@ -156,7 +164,9 @@ jobs:
           COPY pkg-root-${TARGETARCH}/etc/digitsflow/php /etc/digitsflow/php
           RUN ln -sf /opt/digitsflow/php/bin/php-digitsflow /usr/local/bin/php && \
               ln -sf /opt/digitsflow/php/sbin/php-fpm-digitsflow /usr/local/bin/php-fpm && \
-              mkdir -p /run/digitsflow && chown www-data:www-data /run/digitsflow
+              mkdir -p /run/digitsflow && chown www-data:www-data /run/digitsflow && \
+              LD_BIND_NOW=1 /usr/local/bin/php -v && \
+              LD_BIND_NOW=1 /usr/local/bin/php-fpm -v
           WORKDIR /var/www/html
           EXPOSE 9000
           CMD ["php-fpm-digitsflow", "--nodaemonize", "--fpm-config", "/etc/digitsflow/php/php-fpm.conf"]
@@ -197,3 +207,17 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Publish Verified Multi-Arch Release (on Tag)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+              gh release create "$TAG_NAME" --generate-notes --title "Digitsflow PHP $TAG_NAME" || true
+            fi
+            gh release upload "$TAG_NAME" "$TARBALL_X64" "$TARBALL_ARM64" --clobber
+          else
+            echo "Verified multi-arch packages (${TARBALL_X64}, ${TARBALL_ARM64}) passed all pre-release gates for ref ${GITHUB_REF}."
+          fi
