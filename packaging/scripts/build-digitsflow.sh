@@ -51,14 +51,20 @@ if pkg-config --exists icu-uc; then
   EXTRA_CONFIG_FLAGS+=( "--enable-intl" )
 fi
 
-# 2. Configure build with full isolation flags
+# 2. Configure build with full isolation flags and self-contained RPATH
 echo "[2/4] Running configure..."
+export LDFLAGS="${LDFLAGS:-} -Wl,-rpath,${PREFIX}/lib -Wl,--disable-new-dtags -Wl,-z,lazy"
 ./configure \
   --prefix="${PREFIX}" \
   --program-suffix="-digitsflow" \
   --with-config-file-path="${SYSCONFDIR}" \
   --with-config-file-scan-dir="${SYSCONFDIR}/conf.d" \
   PHP_EXTRA_VERSION="${EXTRA_VERSION}" \
+  ac_cv_lib_pq_PQclosePrepared=no \
+  ac_cv_lib_pq_PQclosePortal=no \
+  ac_cv_lib_pq_PQchangePassword=no \
+  ac_cv_lib_pq_PQsocketPoll=no \
+  ac_cv_lib_pq_PQsetChunkedRowsMode=no \
   --enable-fpm \
   --with-fpm-user=www-data \
   --with-fpm-group=www-data \
@@ -90,6 +96,36 @@ make -j"${NPROC}"
 echo "[4/4] Installing..."
 if [ -n "${INSTALL_ROOT}" ]; then
   make install INSTALL_ROOT="${INSTALL_ROOT}"
+
+  # Bundle non-glibc runtime shared libraries into ${INSTALL_ROOT}${PREFIX}/lib
+  # so the prebuilt tarball is self-contained across Ubuntu/Debian hosts.
+  mkdir -p "${INSTALL_ROOT}${PREFIX}/lib"
+  if command -v ldd >/dev/null 2>&1; then
+    echo "Bundling runtime shared libraries into ${PREFIX}/lib..."
+    for bin_target in "${INSTALL_ROOT}${PREFIX}/bin/php-digitsflow" "${INSTALL_ROOT}${PREFIX}/sbin/php-fpm-digitsflow"; do
+      if [ -f "${bin_target}" ]; then
+        while read -r soname lib_path; do
+          [ -z "${soname}" ] || [ -z "${lib_path}" ] && continue
+          case "${soname}" in
+            linux-vdso*|ld-linux*|libc.so*|libm.so*|libdl.so*|librt.so*|libpthread.so*|libresolv.so*|libutil.so*|libnsl.so*|libcrypt.so*|libanl.so*|libBrokenLocale.so*|libgcc_s.so*|libstdc++.so*)
+              continue
+              ;;
+          esac
+          if [ -f "${lib_path}" ] && [ ! -f "${INSTALL_ROOT}${PREFIX}/lib/${soname}" ]; then
+            cp -L "${lib_path}" "${INSTALL_ROOT}${PREFIX}/lib/${soname}"
+            chmod 755 "${INSTALL_ROOT}${PREFIX}/lib/${soname}"
+          fi
+        done < <(ldd "${bin_target}" | awk '/=> \// { print $1, $3 }')
+      fi
+    done
+    if command -v patchelf >/dev/null 2>&1; then
+      for elf_target in "${INSTALL_ROOT}${PREFIX}/bin/php-digitsflow" "${INSTALL_ROOT}${PREFIX}/sbin/php-fpm-digitsflow" "${INSTALL_ROOT}${PREFIX}/lib/"*.so*; do
+        if [ -f "${elf_target}" ]; then
+          patchelf --force-rpath --set-rpath "${PREFIX}/lib" "${elf_target}" 2>/dev/null || true
+        fi
+      done
+    fi
+  fi
   
   # Ensure isolated configuration and runtime directories exist in the package
   mkdir -p "${INSTALL_ROOT}${SYSCONFDIR}/conf.d"
