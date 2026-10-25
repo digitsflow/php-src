@@ -115,15 +115,43 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "--> Downloading ${TARBALL_NAME}..."
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "${DOWNLOAD_URL}" -o "${TMP_DIR}/${TARBALL_NAME}"
-elif command -v wget >/dev/null 2>&1; then
-  wget -q "${DOWNLOAD_URL}" -O "${TMP_DIR}/${TARBALL_NAME}"
+if [ -n "${LOCAL_TARBALL:-}" ]; then
+  if [ ! -f "${LOCAL_TARBALL}" ]; then
+    echo "Error: LOCAL_TARBALL not found at ${LOCAL_TARBALL}"
+    exit 1
+  fi
+  echo "--> Using local tarball ${LOCAL_TARBALL}..."
+  cp "${LOCAL_TARBALL}" "${TMP_DIR}/${TARBALL_NAME}"
 else
-  echo "Error: Neither curl nor wget found. Please install curl or wget."
+  echo "--> Downloading ${TARBALL_NAME}..."
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "${DOWNLOAD_URL}" -o "${TMP_DIR}/${TARBALL_NAME}"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q "${DOWNLOAD_URL}" -O "${TMP_DIR}/${TARBALL_NAME}"
+  else
+    echo "Error: Neither curl nor wget found. Please install curl or wget."
+    exit 1
+  fi
+fi
+
+echo "--> Verifying package integrity & symbol relocations before installation..."
+STAGE_DIR="${TMP_DIR}/stage"
+mkdir -p "${STAGE_DIR}"
+tar -xzf "${TMP_DIR}/${TARBALL_NAME}" -C "${STAGE_DIR}"
+chmod +x "${STAGE_DIR}/opt/digitsflow/php/bin/"* "${STAGE_DIR}/opt/digitsflow/php/sbin/"* 2>/dev/null || true
+chmod 755 "${STAGE_DIR}/opt/digitsflow/php/lib/"*.so* 2>/dev/null || true
+
+if [ ! -x "${STAGE_DIR}/opt/digitsflow/php/bin/php-digitsflow" ]; then
+  echo "Error: Package is missing /opt/digitsflow/php/bin/php-digitsflow."
   exit 1
 fi
+if command -v ldd >/dev/null 2>&1; then
+  if LD_LIBRARY_PATH="${STAGE_DIR}/opt/digitsflow/php/lib" ldd -r "${STAGE_DIR}/opt/digitsflow/php/bin/php-digitsflow" 2>&1 | grep -E 'not found|undefined symbol'; then
+    echo "Error: Pre-install symbol or library verification failed for php-digitsflow."
+    exit 1
+  fi
+fi
+LD_BIND_NOW=1 LD_LIBRARY_PATH="${STAGE_DIR}/opt/digitsflow/php/lib" "${STAGE_DIR}/opt/digitsflow/php/bin/php-digitsflow" -v >/dev/null
 
 echo "--> Extracting files to /..."
 rm -rf /opt/digitsflow/php/bin /opt/digitsflow/php/sbin /opt/digitsflow/php/lib 2>/dev/null || true
@@ -156,6 +184,12 @@ if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
   systemctl daemon-reload
   echo "    To enable and start PHP-FPM now, run:"
   echo "    sudo systemctl enable --now digitsflow-php-fpm"
+fi
+
+# Final post-install eager symbol binding verification before declaring success
+LD_BIND_NOW=1 /opt/digitsflow/php/bin/php-digitsflow -v >/dev/null
+if [ -x /opt/digitsflow/php/sbin/php-fpm-digitsflow ]; then
+  LD_BIND_NOW=1 /opt/digitsflow/php/sbin/php-fpm-digitsflow -v >/dev/null
 fi
 
 echo "=========================================================="
