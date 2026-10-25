@@ -39,6 +39,9 @@
 #include "zend_exceptions.h"
 #include "zend_attributes.h"
 #include "php_network.h"
+#ifdef HAVE_DLFCN_H
+#include <dlfcn.h>
+#endif
 
 #ifdef HAVE_PGSQL
 
@@ -408,9 +411,22 @@ static bool _php_pgsql_identifier_is_escaped(const char *identifier, size_t len)
 	return true;
 }
 
-#ifndef HAVE_PG_CHANGE_PASSWORD
-static PGresult *PQchangePassword(PGconn *conn, const char *user, const char *passwd)
+static PGresult *php_pgsql_change_password_compat(PGconn *conn, const char *user, const char *passwd)
 {
+#if defined(HAVE_PG_CHANGE_PASSWORD) && defined(HAVE_DLFCN_H) && defined(RTLD_DEFAULT)
+	typedef PGresult *(*pq_change_password_fn)(PGconn *, const char *, const char *);
+	static pq_change_password_fn fn = NULL;
+	static bool resolved = false;
+	if (!resolved) {
+		fn = (pq_change_password_fn)dlsym(RTLD_DEFAULT, "PQchangePassword");
+		resolved = true;
+	}
+	if (fn) {
+		return fn(conn, user, passwd);
+	}
+#elif defined(HAVE_PG_CHANGE_PASSWORD)
+	return PQchangePassword(conn, user, passwd);
+#endif
 	/**
 	 * It is more appropriate to let the configured password encryption algorithm
 	 * being picked up, so we pass NULL
@@ -447,11 +463,23 @@ static PGresult *PQchangePassword(PGconn *conn, const char *user, const char *pa
 
 	return pg_result;
 }
-#endif
 
-#if !defined(HAVE_PG_SOCKET_POLL)
-static int PQsocketPoll(int socket, int read, int write, time_t timeout)
+static int php_pgsql_socket_poll_compat(int socket, int read, int write, time_t timeout)
 {
+#if defined(HAVE_PG_SOCKET_POLL) && defined(HAVE_DLFCN_H) && defined(RTLD_DEFAULT)
+	typedef int (*pq_socket_poll_fn)(int, int, int, time_t);
+	static pq_socket_poll_fn fn = NULL;
+	static bool resolved = false;
+	if (!resolved) {
+		fn = (pq_socket_poll_fn)dlsym(RTLD_DEFAULT, "PQsocketPoll");
+		resolved = true;
+	}
+	if (fn) {
+		return fn(socket, read, write, timeout);
+	}
+#elif defined(HAVE_PG_SOCKET_POLL)
+	return PQsocketPoll(socket, read, write, timeout);
+#endif
 	if (!read && !write)
 		return 0;
 
@@ -482,7 +510,6 @@ static int PQsocketPoll(int socket, int read, int write, time_t timeout)
 
 	return php_poll2(&fd, 1, ts);
 }
-#endif
 
 /* {{{ PHP_INI */
 PHP_INI_BEGIN()
@@ -6292,7 +6319,7 @@ PHP_FUNCTION(pg_change_password)
 	link = Z_PGSQL_LINK_P(pgsql_link);
 	CHECK_PGSQL_LINK(link);
 
-	pg_result = PQchangePassword(link->conn, ZSTR_VAL(user), ZSTR_VAL(passwd));
+	pg_result = php_pgsql_change_password_compat(link->conn, ZSTR_VAL(user), ZSTR_VAL(passwd));
 	RETVAL_BOOL(PQresultStatus(pg_result) == PGRES_COMMAND_OK);
 	PQclear(pg_result);
 }
@@ -6364,7 +6391,7 @@ PHP_FUNCTION(pg_socket_poll)
 		RETURN_THROWS();
 	}
 
-	RETURN_LONG((zend_long)PQsocketPoll(socket, (int)read, (int)write, (int)ts));
+	RETURN_LONG((zend_long)php_pgsql_socket_poll_compat(socket, (int)read, (int)write, (int)ts));
 }
 
 #if defined(HAVE_PG_SET_CHUNKED_ROWS_SIZE)
@@ -6388,7 +6415,20 @@ PHP_FUNCTION(pg_set_chunked_rows_size)
 	CHECK_PGSQL_LINK(link);
 
 	/** can still fail if it is not allowed e.g. already fetched results **/
-
+#if defined(HAVE_DLFCN_H) && defined(RTLD_DEFAULT)
+	typedef int (*pq_set_chunked_rows_mode_fn)(PGconn *, int);
+	static pq_set_chunked_rows_mode_fn fn = NULL;
+	static bool resolved = false;
+	if (!resolved) {
+		fn = (pq_set_chunked_rows_mode_fn)dlsym(RTLD_DEFAULT, "PQsetChunkedRowsMode");
+		resolved = true;
+	}
+	if (!fn) {
+		RETURN_FALSE;
+	}
+	RETURN_BOOL(fn(link->conn, (int)size) == 1);
+#else
 	RETURN_BOOL(PQsetChunkedRowsMode(link->conn, (int)size) == 1);
+#endif
 }
 #endif
