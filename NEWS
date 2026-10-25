@@ -2,6 +2,17 @@ PHP                                                                        NEWS
 |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 ?? ??? ????, PHP 8.6.0RC5
 
+- Core:
+  . Fix function and constant imports in compile_to_ast and add support
+    for grouping. (Klaas Skelte van der Werf)
+
+- DBA:
+  . Fixed bug GH-24641 (ndbm backend never checks dbm_open() return value,
+    NULL deref on first use after a failed open). (Girgias)
+
+- DOM:
+  . Fix error paths in dom_xml_serializing_a_document_node(). (ndossche)
+
 - Hash:
   . Fix GOST and Snefru digests of 512 MiB or more. (Martin Mirchev)
 
@@ -13,6 +24,8 @@ PHP                                                                        NEWS
     empty array element. (jorgsowa)
   . Fixed bug GH-24396 (Assertion failure in zend_jit_def_reg() "reg forwarding"
     with chained Pi nodes). (ndossche)
+  . Fixed JIT treating an array as packed after a string key write turned it
+    into a hash. (jorgsowa)
 
 - PDO_PGSQL:
   . Fixed bug GH-24461 (DISCARD ALL on persistent connection cleanup drops
@@ -21,6 +34,10 @@ PHP                                                                        NEWS
 - SAPI:
   . Fixed infinite loop in sapi_header_op() for headers of 4 GiB or more.
     (Martin Mirchev)
+
+- SPL:
+  . Fixed bug GH-24264 (Unwind/GracefulExit discarded in spl_iterators.c).
+    (Lazizbek Ergashev)
 
 - Standard:
   . Fixed bug GH-24308 (Request shutdown calls closelog() even when syslog
@@ -33,6 +50,12 @@ PHP                                                                        NEWS
     parsing fails after Transfer-Encoding). (bercedev)
   . Fixed bug GH-24509 (HTTP wrapper leaks Location buffer on empty
     Location header). (bercedev)
+
+- Zip:
+  . Reject broken libzip versions 1.3.1, 1.7.0 and 1.12.0 during Windows
+    configuration. (Weilin Du)
+  . Excluded libzip 1.12.0 due to a regression preventing additions and
+    replacements in torrentzip archives. (Weilin Du)
 
 - Zlib:
   . Fixed bug GH-24533 (zlib.lib could not be found because zlib 1.3.2
