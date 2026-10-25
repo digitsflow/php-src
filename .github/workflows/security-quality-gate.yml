@@ -39,9 +39,10 @@ jobs:
 
       - name: Install System Dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/*pgdg* /etc/apt/sources.list.d/*postgresql* || true
           sudo apt-get update
-          sudo apt-get install -y gcc g++ ccache make autoconf bison re2c pkg-config \
-            libxml2-dev libxslt1-dev libssl-dev libsqlite3-dev zlib1g-dev libcurl4-openssl-dev \
+          sudo apt-get install -y --allow-downgrades gcc g++ ccache make autoconf bison re2c pkg-config \
+            libxml2-dev libxslt1-dev libssl-dev libsqlite3-dev libpq-dev zlib1g-dev libcurl4-openssl-dev \
             libonig-dev libzip-dev libsystemd-dev libicu-dev libffi-dev
 
       - name: Configure Compiler Cache
@@ -83,6 +84,8 @@ jobs:
             --enable-sockets \
             --enable-pdo \
             --with-pdo-sqlite \
+            --with-pdo-pgsql \
+            --with-pgsql \
             --with-ffi \
             --with-mhash \
             --with-xsl \
@@ -113,6 +116,7 @@ jobs:
               ext/hash/tests/gh23950.phpt \
               ext/opcache/tests/jit/aarch64_ir_patch_and_veneer_safety.phpt \
               ext/pdo/tests/pdo_fetch_both_column_count_overflow.phpt \
+              ext/pdo_pgsql/tests/libpq_symbol_portability.phpt \
               ext/session/tests/gh24376_session_cloexec.phpt \
               ext/session/tests/mod_user_create_sid_null.phpt \
               ext/soap/tests/gh23771.phpt \
