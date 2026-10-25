@@ -32,6 +32,9 @@
 #include "zend_interfaces.h"
 #include "zend_smart_str.h"
 #include "pgsql_driver_arginfo.h"
+#ifdef HAVE_DLFCN_H
+#include <dlfcn.h>
+#endif
 
 static bool pgsql_handle_in_transaction(pdo_dbh_t *dbh);
 
@@ -1406,13 +1409,29 @@ static void pdo_pgsql_request_shutdown(pdo_dbh_t *dbh)
 		zend_string *name;
 
 		ZEND_HASH_MAP_FOREACH_STR_KEY(H->prepared_stmts, name) {
-#ifndef HAVE_PQCLOSEPREPARED
+#if defined(HAVE_PQCLOSEPREPARED) && defined(HAVE_DLFCN_H) && defined(RTLD_DEFAULT)
+			typedef PGresult *(*pq_close_prepared_fn)(PGconn *, const char *);
+			static pq_close_prepared_fn fn = NULL;
+			static bool resolved = false;
+			if (!resolved) {
+				fn = (pq_close_prepared_fn)dlsym(RTLD_DEFAULT, "PQclosePrepared");
+				resolved = true;
+			}
+			if (fn) {
+				res = fn(H->server, ZSTR_VAL(name));
+			} else {
+				char *q;
+				spprintf(&q, 0, "DEALLOCATE %s", ZSTR_VAL(name));
+				res = PQexec(H->server, q);
+				efree(q);
+			}
+#elif defined(HAVE_PQCLOSEPREPARED)
+			res = PQclosePrepared(H->server, ZSTR_VAL(name));
+#else
 			char *q;
 			spprintf(&q, 0, "DEALLOCATE %s", ZSTR_VAL(name));
 			res = PQexec(H->server, q);
 			efree(q);
-#else
-			res = PQclosePrepared(H->server, ZSTR_VAL(name));
 #endif
 			PQclear(res);
 		} ZEND_HASH_FOREACH_END();

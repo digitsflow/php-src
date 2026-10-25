@@ -28,6 +28,9 @@
 #ifdef HAVE_NETINET_IN_H
 #include <netinet/in.h>
 #endif
+#ifdef HAVE_DLFCN_H
+#include <dlfcn.h>
+#endif
 
 /* from postgresql/src/include/catalog/pg_type.h */
 #define BOOLLABEL   "bool"
@@ -73,7 +76,6 @@ static bool pgsql_result_status_ok(ExecStatusType status)
 	}
 }
 
-#ifndef HAVE_PQCLOSEPORTAL
 static bool pdo_pgsql_try_cmd(const char *cmd, const char *ok_sqlstate, pdo_pgsql_db_handle *H)
 {
 	bool result = false;
@@ -113,7 +115,58 @@ static bool pdo_pgsql_try_cmd(const char *cmd, const char *ok_sqlstate, pdo_pgsq
 
 	return result;
 }
+
+typedef PGresult *(*pdo_pgsql_close_fn)(PGconn *conn, const char *name);
+
+static PGresult *pdo_pgsql_close_prepared_compat(PGconn *conn, const char *stmt_name)
+{
+#if defined(HAVE_PQCLOSEPREPARED) && defined(HAVE_DLFCN_H) && defined(RTLD_DEFAULT)
+	static pdo_pgsql_close_fn fn = NULL;
+	static bool resolved = false;
+	if (!resolved) {
+		fn = (pdo_pgsql_close_fn)dlsym(RTLD_DEFAULT, "PQclosePrepared");
+		resolved = true;
+	}
+	if (fn) {
+		return fn(conn, stmt_name);
+	}
+#elif defined(HAVE_PQCLOSEPREPARED)
+	return PQclosePrepared(conn, stmt_name);
 #endif
+	char *q = NULL;
+	spprintf(&q, 0, "DEALLOCATE %s", stmt_name);
+	PGresult *res = PQexec(conn, q);
+	efree(q);
+	return res;
+}
+
+static bool pdo_pgsql_close_portal_compat(pdo_pgsql_db_handle *H, const char *cursor_name)
+{
+#if defined(HAVE_PQCLOSEPORTAL) && defined(HAVE_DLFCN_H) && defined(RTLD_DEFAULT)
+	static pdo_pgsql_close_fn fn = NULL;
+	static bool resolved = false;
+	if (!resolved) {
+		fn = (pdo_pgsql_close_fn)dlsym(RTLD_DEFAULT, "PQclosePortal");
+		resolved = true;
+	}
+	if (fn) {
+		PGresult *res = fn(H->server, cursor_name);
+		bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+		PQclear(res);
+		return ok;
+	}
+#elif defined(HAVE_PQCLOSEPORTAL)
+	PGresult *res = PQclosePortal(H->server, cursor_name);
+	bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+	PQclear(res);
+	return ok;
+#endif
+	char *q = NULL;
+	spprintf(&q, 0, "CLOSE %s", cursor_name);
+	bool ok = pdo_pgsql_try_cmd(q, "34000", H); /* 34000: invalid_cursor_name */
+	efree(q);
+	return ok;
+}
 
 
 static void pgsql_stmt_finish(pdo_pgsql_stmt *S, int fin_mode)
@@ -178,17 +231,7 @@ static void pgsql_stmt_finish(pdo_pgsql_stmt *S, int fin_mode)
 	}
 
 	if (S->stmt_name && S->is_prepared && (fin_mode & FIN_CLOSE)) {
-		PGresult *res;
-#ifndef HAVE_PQCLOSEPREPARED
-		// TODO (??) libpq does not support close statement protocol < postgres 17
-		// check if we can circumvent this.
-		char *q = NULL;
-		spprintf(&q, 0, "DEALLOCATE %s", S->stmt_name);
-		res = PQexec(H->server, q);
-		efree(q);
-#else
-		res = PQclosePrepared(H->server, S->stmt_name);
-#endif
+		PGresult *res = pdo_pgsql_close_prepared_compat(H->server, S->stmt_name);
 		if (res) {
 			if (H->prepared_stmts && PQresultStatus(res) == PGRES_COMMAND_OK) {
 				zend_hash_str_del(H->prepared_stmts, S->stmt_name, strlen(S->stmt_name));
@@ -238,14 +281,7 @@ static int pgsql_stmt_dtor(pdo_stmt_t *stmt)
 	if (S->cursor_name) {
 		if (S->is_cursor_declared && server_obj_usable) {
 			pdo_pgsql_db_handle *H = S->H;
-#ifndef HAVE_PQCLOSEPORTAL
-			char *q;
-			spprintf(&q, 0, "CLOSE %s", S->cursor_name);
-			pdo_pgsql_try_cmd(q, "34000", H); /* 34000: invalid_cursor_name */
-			efree(q);
-#else
-			PQclear(PQclosePortal(H->server, S->cursor_name));
-#endif
+			(void)pdo_pgsql_close_portal_compat(H, S->cursor_name);
 		}
 		efree(S->cursor_name);
 		S->cursor_name = NULL;
@@ -269,9 +305,9 @@ static int pgsql_stmt_execute(pdo_stmt_t *stmt)
 
 	bool in_trans = stmt->dbh->methods->in_transaction(stmt->dbh);
 
-	/* in unbuffered mode, finish any running statement: libpq explicitly prohibits this
+	/* in unbuffered mode, finish any running statement: libpq explicitely prohibits this
 	 * and returns a PGRES_FATAL_ERROR when PQgetResult gets called for stmt 2 if DEALLOCATE
-	 * was called for stmt 1 in between
+	 * was called for stmt 1 inbetween
 	 * (maybe it will change with pipeline mode in libpq 14?) */
 	if (S->is_unbuffered && H->running_stmt) {
 		pgsql_stmt_finish(H->running_stmt, FIN_CLOSE);
@@ -286,24 +322,9 @@ static int pgsql_stmt_execute(pdo_stmt_t *stmt)
 		char *q = NULL;
 
 		if (S->is_cursor_declared) {
-#ifndef HAVE_PQCLOSEPORTAL
-			spprintf(&q, 0, "CLOSE %s", S->cursor_name);
-
-			/* 34000: invalid_cursor_name */
-			if (pdo_pgsql_try_cmd(q, "34000", H)) {
+			if (pdo_pgsql_close_portal_compat(H, S->cursor_name)) {
 				S->is_cursor_declared = false;
 			}
-
-			efree(q);
-#else
-			PGresult *res = PQclosePortal(H->server, S->cursor_name);
-
-			if (PQresultStatus(res) == PGRES_COMMAND_OK) {
-				S->is_cursor_declared = false;
-			}
-
-			PQclear(res);
-#endif
 		}
 
 		spprintf(&q, 0, "DECLARE %s SCROLL CURSOR WITH HOLD FOR %s", S->cursor_name, ZSTR_VAL(stmt->active_query_string));
@@ -356,14 +377,7 @@ stmt_retry:
 					 * deallocate it and retry ONCE (thies 2005.12.15)
 					 */
 					if (sqlstate && !strcmp(sqlstate, "42P05")) {
-						PGresult *res;
-#ifndef HAVE_PQCLOSEPREPARED
-						char buf[100]; /* stmt_name == "pdo_crsr_%08x" */
-						snprintf(buf, sizeof(buf), "DEALLOCATE %s", S->stmt_name);
-						res = PQexec(H->server, buf);
-#else
-						res = PQclosePrepared(H->server, S->stmt_name);
-#endif
+						PGresult *res = pdo_pgsql_close_prepared_compat(H->server, S->stmt_name);
 						if (res) {
 							PQclear(res);
 						}
@@ -434,7 +448,22 @@ stmt_retry:
 		/* no matter if they return 0: PQ then transparently fallbacks to full result fetching */
 #ifdef HAVE_PG_SET_CHUNKED_ROWS_SIZE
 		if (S->chunk_size >= 1) {
+#if defined(HAVE_DLFCN_H) && defined(RTLD_DEFAULT)
+			typedef int (*pq_set_chunked_rows_mode_fn)(PGconn *, int);
+			static pq_set_chunked_rows_mode_fn chunk_fn = NULL;
+			static bool chunk_resolved = false;
+			if (!chunk_resolved) {
+				chunk_fn = (pq_set_chunked_rows_mode_fn)dlsym(RTLD_DEFAULT, "PQsetChunkedRowsMode");
+				chunk_resolved = true;
+			}
+			if (chunk_fn) {
+				(void)chunk_fn(H->server, (int)S->chunk_size);
+			} else {
+				(void)PQsetSingleRowMode(H->server);
+			}
+#else
 			(void)PQsetChunkedRowsMode(H->server, (int)S->chunk_size);
+#endif
 		} else {
 			(void)PQsetSingleRowMode(H->server);
 		}
@@ -758,17 +787,8 @@ static int pgsql_stmt_get_col(pdo_stmt_t *stmt, int colno, zval *result, enum pd
 #if SIZEOF_ZEND_LONG >= 8
 			case INT8OID:
 #endif
-			{
-				/* PostgreSQL sends integers in canonical decimal form, which the numeric array key
-				 * parser handles without the overhead of strtoll() */
-				zend_ulong lval;
-				if (EXPECTED(ZEND_HANDLE_NUMERIC_STR(ptr, len, lval))) {
-					ZVAL_LONG(result, (zend_long) lval);
-				} else {
-					ZVAL_LONG(result, ZEND_ATOL(ptr));
-				}
+				ZVAL_LONG(result, ZEND_ATOL(ptr));
 				break;
-			}
 			case FLOAT4OID:
 			case FLOAT8OID:
                 if (strncmp(ptr, "Infinity", len) == 0) {
