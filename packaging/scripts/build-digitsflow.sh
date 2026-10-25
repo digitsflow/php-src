@@ -107,7 +107,7 @@ if [ -n "${INSTALL_ROOT}" ]; then
         while read -r soname lib_path; do
           [ -z "${soname}" ] || [ -z "${lib_path}" ] && continue
           case "${soname}" in
-            linux-vdso*|ld-linux*|libc.so*|libm.so*|libdl.so*|librt.so*|libpthread.so*|libresolv.so*|libutil.so*|libnsl.so*|libcrypt.so*|libanl.so*|libBrokenLocale.so*|libgcc_s.so*|libstdc++.so*)
+            linux-vdso*|ld-linux*|libc.so*|libm.so*|libdl.so*|librt.so*|libpthread.so*|libresolv.so*|libutil.so*|libnsl.so*|libanl.so*|libBrokenLocale.so*)
               continue
               ;;
           esac
@@ -125,6 +125,16 @@ if [ -n "${INSTALL_ROOT}" ]; then
         fi
       done
     fi
+    echo "Verifying staged ELF symbol relocations and eager binding (LD_BIND_NOW=1)..."
+    for bin_target in "${INSTALL_ROOT}${PREFIX}/bin/php-digitsflow" "${INSTALL_ROOT}${PREFIX}/sbin/php-fpm-digitsflow"; do
+      if [ -x "${bin_target}" ]; then
+        if LD_LIBRARY_PATH="${INSTALL_ROOT}${PREFIX}/lib" ldd -r "${bin_target}" 2>&1 | grep -E 'not found|undefined symbol'; then
+          echo "ERROR: Unresolved shared library or symbol relocation detected in ${bin_target}!"
+          exit 1
+        fi
+        LD_BIND_NOW=1 LD_LIBRARY_PATH="${INSTALL_ROOT}${PREFIX}/lib" "${bin_target}" -v >/dev/null
+      fi
+    done
   fi
   
   # Ensure isolated configuration and runtime directories exist in the package
