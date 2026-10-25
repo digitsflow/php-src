@@ -23,12 +23,21 @@ PHP                                                                        NEWS
   . Fix escape analysis for objects implementing ArrayAccess. (ndossche, Arnaud)
   . Fix UAF for resolved callable zval. (EdmondDantes)
   . Fix memory leak for nested HTTP calls. (EdmondDantes)
+  . Fix function and constant imports in compile_to_ast and add support
+    for grouping. (Klaas Skelte van der Werf)
 
 - Date:
   . Fixed bug GH-20503 (Assertion failure with ext/date DateInterval property
     hash construction). (heathdutton)
   . Fixed bug GH-24350 (MINIT reads a stale external tz database after an
     in-process module restart). (Lazizbek Ergashev)
+
+- DBA:
+  . Fixed bug GH-24641 (ndbm backend never checks dbm_open() return value,
+    NULL deref on first use after a failed open). (Girgias)
+
+- DOM:
+  . Fix error paths in dom_xml_serializing_a_document_node(). (ndossche)
 
 - Fileinfo:
   . Fixed bug GH-24289 (finfo::file() reports the wrong argument number for
@@ -89,6 +98,8 @@ PHP                                                                        NEWS
     empty array element. (jorgsowa)
   . Fixed bug GH-24396 (Assertion failure in zend_jit_def_reg() "reg forwarding"
     with chained Pi nodes). (ndossche)
+  . Fixed JIT treating an array as packed after a string key write turned it
+    into a hash. (jorgsowa)
 
 - PDO:
   . Fixed invalid ATTR_ORACLE_NULLS values being accepted and truncated.
@@ -100,6 +111,10 @@ PHP                                                                        NEWS
 
 - Phpdbg:
   . Fix wrong command names. (ndossche, Weilin Du)
+  . Fixed bug GH-22480 (Use-after-free when re-watching an already-watched
+    variable). (Ilia Alshanetsky)
+  . Fixed over-read when watching a packed array element. (Ilia Alshanetsky)
+  . Fixed double free of watch element chains. (Arnaud)
 
 - POSIX:
   . Fixed posix_setrlimit() rejecting POSIX_RLIMIT_INFINITY on Solaris.
@@ -116,6 +131,10 @@ PHP                                                                        NEWS
 - Session:
   . Fixed session data loss in the files save handler when writing the session
     file fails after it was already truncated. (Ilia Alshanetsky)
+
+- SPL:
+  . Fixed bug GH-24264 (Unwind/GracefulExit discarded in spl_iterators.c).
+    (Lazizbek Ergashev)
 
 - Standard:
   . Fixed bug GH-24308 (Request shutdown calls closelog() even when syslog
@@ -142,6 +161,10 @@ PHP                                                                        NEWS
     tidy::repairFile() rejecting null for $encoding. (lacatoire)
 
 - Zip:
+  . Reject broken libzip versions 1.3.1, 1.7.0 and 1.12.0 during Windows
+    configuration. (Weilin Du)
+  . Excluded libzip 1.12.0 due to a regression preventing additions and
+    replacements in torrentzip archives. (Weilin Du)
   . Fixed use-after-free when re-entering ZipArchive during destruction or
     a close warning, and rejected opening streams while closing. (jvoisin)
   . Fixed a use-after-free when a ZipArchive method that modifies the archive
