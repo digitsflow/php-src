@@ -126,10 +126,12 @@ else
 fi
 
 echo "--> Extracting files to /..."
+rm -rf /opt/digitsflow/php/bin /opt/digitsflow/php/sbin /opt/digitsflow/php/lib 2>/dev/null || true
 tar -xzf "${TMP_DIR}/${TARBALL_NAME}" -C /
 
-# Ensure execution permissions on installed binaries
+# Ensure execution permissions on installed binaries and bundled libraries
 chmod +x /opt/digitsflow/php/bin/* /opt/digitsflow/php/sbin/* 2>/dev/null || true
+chmod 755 /opt/digitsflow/php/lib/*.so* 2>/dev/null || true
 
 # Symlink binaries into /usr/local/bin
 echo "--> Creating symlinks in /usr/local/bin..."
