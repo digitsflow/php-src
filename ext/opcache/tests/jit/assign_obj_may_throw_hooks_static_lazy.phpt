@@ -63,9 +63,17 @@ final class HookedPropBox {
     public $v {
         get => 1;
     }
-    public int $th = 0 {
+    public int $th {
         set(int $v) {
             throw new RuntimeException("typed_hook_set_boom");
+        }
+    }
+    public int $bth = 0 {
+        set(int $v) {
+            if ($v > 0) {
+                throw new RuntimeException("backed_typed_hook_boom");
+            }
+            $this->bth = $v;
         }
     }
 }
@@ -98,6 +106,15 @@ function writeTypedHookSet(HookedPropBox $b): string {
     }
 }
 
+function writeBackedTypedHookSet(HookedPropBox $b): string {
+    try {
+        sink($b->bth = 35, new stdClass());
+        return "BUG_BACKED_TYPED_HOOK_SET";
+    } catch (RuntimeException $e) {
+        return $e->getMessage();
+    }
+}
+
 final class LazyTargetBox {
     public $u = 0;
     public int $t = 0;
@@ -125,6 +142,7 @@ $hb = new HookedPropBox();
 var_dump(writeHookSet($hb));
 var_dump(writeHookVirtual($hb));
 var_dump(writeTypedHookSet($hb));
+var_dump(writeBackedTypedHookSet($hb));
 
 $rc = new ReflectionClass(LazyTargetBox::class);
 $lazy1 = $rc->newLazyGhost(static function (LazyTargetBox $obj): void {
@@ -140,6 +158,7 @@ PHP);
     var_dump("hook_set_boom");
     var_dump("caught_virtual");
     var_dump("typed_hook_set_boom");
+    var_dump("backed_typed_hook_boom");
     var_dump("lazy_untyped_boom");
     var_dump("lazy_typed_boom");
 }
@@ -153,5 +172,6 @@ int(99)
 string(13) "hook_set_boom"
 string(14) "caught_virtual"
 string(19) "typed_hook_set_boom"
+string(22) "backed_typed_hook_boom"
 string(17) "lazy_untyped_boom"
 string(15) "lazy_typed_boom"
