@@ -773,10 +773,11 @@ static inline int object_common(UNSERIALIZE_PARAMETER, zend_long elements, bool 
 		array_init_size(&ary, elements);
 		/* Avoid reallocation due to packed -> mixed conversion. */
 		zend_hash_real_init_mixed(Z_ARRVAL(ary));
-		if (!process_nested_array_data(UNSERIALIZE_PASSTHRU, Z_ARRVAL(ary), elements)) {
+		if (!process_nested_array_data(UNSERIALIZE_PASSTHRU, Z_ARRVAL(ary), elements)
+				|| !finish_nested_data(UNSERIALIZE_PASSTHRU)) {
 			ZVAL_DEREF(rval);
 			GC_ADD_FLAGS(Z_OBJ_P(rval), IS_OBJ_DESTRUCTOR_CALLED);
-			zval_ptr_dtor(&ary);
+			ZVAL_COPY_VALUE(var_tmp_var(var_hash), &ary);
 			return 0;
 		}
 
@@ -789,7 +790,7 @@ static inline int object_common(UNSERIALIZE_PARAMETER, zend_long elements, bool 
 		tmp++;
 		ZVAL_COPY_VALUE(tmp, &ary);
 
-		return finish_nested_data(UNSERIALIZE_PASSTHRU);
+		return 1;
 	}
 
 	has_wakeup = Z_OBJCE_P(rval) != PHP_IC_ENTRY
@@ -801,7 +802,8 @@ static inline int object_common(UNSERIALIZE_PARAMETER, zend_long elements, bool 
 	}
 
 	zend_hash_extend(ht, zend_hash_num_elements(ht) + elements, HT_FLAGS(ht) & HASH_FLAG_PACKED);
-	if (!process_nested_object_data(UNSERIALIZE_PASSTHRU, ht, elements, Z_OBJ_P(rval))) {
+	if (!process_nested_object_data(UNSERIALIZE_PASSTHRU, ht, elements, Z_OBJ_P(rval))
+			|| !finish_nested_data(UNSERIALIZE_PASSTHRU)) {
 		if (has_wakeup) {
 			ZVAL_DEREF(rval);
 			GC_ADD_FLAGS(Z_OBJ_P(rval), IS_OBJ_DESTRUCTOR_CALLED);
@@ -817,7 +819,7 @@ static inline int object_common(UNSERIALIZE_PARAMETER, zend_long elements, bool 
 		Z_EXTRA_P(wakeup_var) = VAR_WAKEUP_FLAG;
 	}
 
-	return finish_nested_data(UNSERIALIZE_PASSTHRU);
+	return 1;
 }
 #ifdef PHP_WIN32
 # pragma optimize("", on)

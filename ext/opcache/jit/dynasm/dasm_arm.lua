@@ -1044,7 +1044,7 @@ map_op[".type_3"] = function(params, nparams)
     ctypefmt = format("Dt%X(%%s)", num),
     reg = reg,
   }
-  wline(format("#define Dt%X(_V) (int)(ptrdiff_t)&(((%s *)0)_V)", num, ctype))
+  wline(format("#define Dt%X(_V) (int)((uintptr_t)&(((%s *)0x1000)_V) - 0x1000)", num, ctype))
   ctypenum = num
 end
 map_op[".type_2"] = map_op[".type_3"]
