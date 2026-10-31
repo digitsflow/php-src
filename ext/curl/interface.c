@@ -1884,6 +1884,20 @@ PHP_FUNCTION(curl_init)
 }
 /* }}} */
 
+static void _php_copy_callback(php_curl *ch, php_curl_callback **new_callback, php_curl_callback *source_callback, CURLoption option)
+{
+	if (source_callback) {
+		*new_callback = ecalloc(1, sizeof(php_curl_callback));
+		if (!Z_ISUNDEF(source_callback->func_name)) {
+			ZVAL_COPY(&(*new_callback)->func_name, &source_callback->func_name);
+		}
+	}
+
+	/* The callback data (i.e. pointer to the curl handle) stays even if a user callback
+	 * is reset to NULL. Ensure the data pointer always points to the new handle. */
+	curl_easy_setopt(ch->cp, option, (void *) ch);
+}
+
 void _php_setup_easy_copy_handlers(php_curl *ch, php_curl *source)
 {
 	if (!Z_ISUNDEF(source->handlers.write->stream)) {
@@ -1901,6 +1915,10 @@ void _php_setup_easy_copy_handlers(php_curl *ch, php_curl *source)
 		Z_ADDREF(source->handlers.write_header->stream);
 	}
 	ch->handlers.write_header->stream = source->handlers.write_header->stream;
+	if (!Z_ISUNDEF(source->handlers.std_err)) {
+		Z_ADDREF(source->handlers.std_err);
+	}
+	ch->handlers.std_err = source->handlers.std_err;
 
 	ch->handlers.write->fp = source->handlers.write->fp;
 	ch->handlers.write_header->fp = source->handlers.write_header->fp;
@@ -1923,21 +1941,8 @@ void _php_setup_easy_copy_handlers(php_curl *ch, php_curl *source)
 	curl_easy_setopt(ch->cp, CURLOPT_WRITEHEADER,       (void *) ch);
 	curl_easy_setopt(ch->cp, CURLOPT_DEBUGDATA,         (void *) ch);
 
-	if (source->handlers.progress) {
-		ch->handlers.progress = ecalloc(1, sizeof(php_curl_callback));
-		if (!Z_ISUNDEF(source->handlers.progress->func_name)) {
-			ZVAL_COPY(&ch->handlers.progress->func_name, &source->handlers.progress->func_name);
-		}
-		curl_easy_setopt(ch->cp, CURLOPT_PROGRESSDATA, (void *) ch);
-	}
-
-	if (source->handlers.fnmatch) {
-		ch->handlers.fnmatch = ecalloc(1, sizeof(php_curl_callback));
-		if (!Z_ISUNDEF(source->handlers.fnmatch->func_name)) {
-			ZVAL_COPY(&ch->handlers.fnmatch->func_name, &source->handlers.fnmatch->func_name);
-		}
-		curl_easy_setopt(ch->cp, CURLOPT_FNMATCH_DATA, (void *) ch);
-	}
+	_php_copy_callback(ch, &ch->handlers.progress, source->handlers.progress, CURLOPT_PROGRESSDATA);
+	_php_copy_callback(ch, &ch->handlers.fnmatch, source->handlers.fnmatch, CURLOPT_FNMATCH_DATA);
 
 	ZVAL_COPY(&ch->private_data, &source->private_data);
 
