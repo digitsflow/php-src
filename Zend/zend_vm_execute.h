@@ -445,7 +445,7 @@ static zend_vm_opcode_handler_func_t zend_vm_get_opcode_handler_func(uint8_t opc
 # define ZEND_VM_ENTER()           execute_data = EG(current_execute_data); LOAD_OPLINE(); ZEND_VM_ENTER_EX()
 # define ZEND_VM_LEAVE()           return (zend_op*)((uintptr_t)opline | ZEND_VM_ENTER_BIT)
 #endif
-#define ZEND_VM_INTERRUPT()      ZEND_VM_TAIL_CALL(zend_interrupt_helper_SPEC(ZEND_OPCODE_HANDLER_ARGS_PASSTHRU));
+#define ZEND_VM_INTERRUPT()      ZEND_VM_KIND_TAILCALL_SAVE_OPLINE(); ZEND_VM_TAIL_CALL(zend_interrupt_helper_SPEC(ZEND_OPCODE_HANDLER_ARGS_PASSTHRU));
 #ifdef ZEND_VM_FP_GLOBAL_REG
 #define ZEND_VM_LOOP_INTERRUPT() zend_interrupt_helper_SPEC(ZEND_OPCODE_HANDLER_ARGS_PASSTHRU);
 #else
@@ -4049,7 +4049,11 @@ static zend_never_inline ZEND_OPCODE_HANDLER_RET ZEND_OPCODE_HANDLER_FUNC_CCONV 
 
 			}
 		}
-		ZEND_VM_ENTER();
+		/* Like ZEND_VM_ENTER() but don't check for interrupts yet to avoid recursion if the
+		 * interrupt handler re-sets the vm_interrupt flag. */
+		execute_data = EG(current_execute_data);
+		LOAD_OPLINE();
+		ZEND_VM_LEAVE();
 	}
 	ZEND_VM_CONTINUE();
 }
@@ -59777,7 +59781,11 @@ static zend_never_inline ZEND_OPCODE_HANDLER_RET ZEND_OPCODE_HANDLER_CCONV  zend
 
 			}
 		}
-		ZEND_VM_ENTER();
+		/* Like ZEND_VM_ENTER() but don't check for interrupts yet to avoid recursion if the
+		 * interrupt handler re-sets the vm_interrupt flag. */
+		execute_data = EG(current_execute_data);
+		LOAD_OPLINE();
+		ZEND_VM_LEAVE();
 	}
 	ZEND_VM_CONTINUE();
 }
