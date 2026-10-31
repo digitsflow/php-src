@@ -513,7 +513,7 @@ PHPAPI int php_network_parse_network_address_with_port(const char *addr, zend_lo
 	char *colon;
 	char *tmp;
 	int ret = FAILURE;
-	short port;
+	zend_long port;
 	struct sockaddr_in *in4 = (struct sockaddr_in*)sa;
 	struct sockaddr **psal;
 	int n;
@@ -526,19 +526,27 @@ PHPAPI int php_network_parse_network_address_with_port(const char *addr, zend_lo
 	memset(in4, 0, sizeof(struct sockaddr_in));
 #endif
 
+	if (addrlen == 0 || memchr(addr, '\0', addrlen) != NULL) {
+		return FAILURE;
+	}
+
 	if (*addr == '[') {
 		colon = memchr(addr + 1, ']', addrlen-1);
 		if (!colon || colon[1] != ':') {
 			return FAILURE;
 		}
-		port = atoi(colon + 2);
+		port = ZEND_STRTOL(colon + 2, NULL, 10);
 		addr++;
 	} else {
 		colon = memchr(addr, ':', addrlen);
 		if (!colon) {
 			return FAILURE;
 		}
-		port = atoi(colon + 1);
+		port = ZEND_STRTOL(colon + 1, NULL, 10);
+	}
+
+	if (port < 0 || port > 65535) {
+		return FAILURE;
 	}
 
 	tmp = estrndup(addr, colon - addr);
