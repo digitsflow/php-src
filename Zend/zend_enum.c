@@ -304,9 +304,7 @@ void zend_enum_register_funcs(zend_class_entry *ce)
 {
 	const uint32_t fn_flags =
 		ZEND_ACC_PUBLIC|ZEND_ACC_STATIC|ZEND_ACC_HAS_RETURN_TYPE|ZEND_ACC_ARENA_ALLOCATED;
-	zend_internal_function *cases_function =
-		zend_arena_alloc(&CG(arena), sizeof(zend_internal_function));
-	memset(cases_function, 0, sizeof(zend_internal_function));
+	zend_internal_function *cases_function = zend_arena_calloc(&CG(arena), 1, sizeof(zend_internal_function));
 	cases_function->type = ZEND_INTERNAL_FUNCTION;
 	cases_function->module = EG(current_module);
 	cases_function->handler = zend_enum_cases_func;
@@ -319,9 +317,7 @@ void zend_enum_register_funcs(zend_class_entry *ce)
 	}
 
 	if (ce->enum_backing_type != IS_UNDEF) {
-		zend_internal_function *from_function =
-			zend_arena_alloc(&CG(arena), sizeof(zend_internal_function));
-		memset(from_function, 0, sizeof(zend_internal_function));
+		zend_internal_function *from_function = zend_arena_calloc(&CG(arena), 1, sizeof(zend_internal_function));
 		from_function->type = ZEND_INTERNAL_FUNCTION;
 		from_function->module = EG(current_module);
 		from_function->handler = zend_enum_from_func;
@@ -336,9 +332,7 @@ void zend_enum_register_funcs(zend_class_entry *ce)
 				"Cannot redeclare %s::from()", ZSTR_VAL(ce->name));
 		}
 
-		zend_internal_function *try_from_function =
-			zend_arena_alloc(&CG(arena), sizeof(zend_internal_function));
-		memset(try_from_function, 0, sizeof(zend_internal_function));
+		zend_internal_function *try_from_function = zend_arena_calloc(&CG(arena), 1, sizeof(zend_internal_function));
 		try_from_function->type = ZEND_INTERNAL_FUNCTION;
 		try_from_function->module = EG(current_module);
 		try_from_function->handler = zend_enum_try_from_func;
