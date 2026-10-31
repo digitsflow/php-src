@@ -6,34 +6,35 @@
 # ==============================================================================
 set -euo pipefail
 
-# Available default release versions
-LATEST_86="v8.6.0-df.2"
-LATEST_85="v8.5.12-df.2"
-LATEST_84="v8.4.28-df.1"
-LATEST_83="v8.3.37-df.1"
-LATEST_82="v8.2.36-df.1"
-LATEST_81="v8.1.34-df.17"
-LATEST_80="v8.0.30-df.1"
-LATEST_74="v7.4.33-df.1"
-LATEST_73="v7.3.33-df.1"
-LATEST_72="v7.2.34-df.1"
-LATEST_71="v7.1.33-df.1"
-LATEST_70="v7.0.33-df.1"
-LATEST_56="v5.6.40-df.1"
-LATEST_55="v5.5.38-df.1"
-LATEST_54="v5.4.45-df.1"
-LATEST_53="v5.3.29-df.1"
-LATEST_52="v5.2.17-df.1"
-LATEST_51="v5.1.6-df.1"
-LATEST_50="v5.0.5-df.1"
-LATEST_44="v4.4.9-df.1"
-LATEST_43="v4.3.11-df.1"
-LATEST_42="v4.2.3-df.1"
-LATEST_41="v4.1.2-df.1"
-LATEST_40="v4.0.6-df.1"
-LATEST_30="v3.0.18-df.1"
-LATEST_20="v2.0.1-df.1"
-LATEST_10="v1.0.0-df.1"
+# Available default release versions (1 non-overlapping release per PHP series)
+LATEST_87="v8.7.0-dev-df.3"
+LATEST_86="v8.6.0-df.3"
+LATEST_85="v8.5.13-df.1"
+LATEST_84="v8.4.28-df.2"
+LATEST_83="v8.3.37-df.2"
+LATEST_82="v8.2.36-df.2"
+LATEST_81="v8.1.34-df.18"
+LATEST_80="v8.0.30-df.2"
+LATEST_74="v7.4.33-df.2"
+LATEST_73="v7.3.33-df.2"
+LATEST_72="v7.2.34-df.2"
+LATEST_71="v7.1.33-df.2"
+LATEST_70="v7.0.33-df.2"
+LATEST_56="v5.6.40-df.2"
+LATEST_55="v5.5.38-df.2"
+LATEST_54="v5.4.45-df.2"
+LATEST_53="v5.3.29-df.2"
+LATEST_52="v5.2.17-df.2"
+LATEST_51="v5.1.6-df.2"
+LATEST_50="v5.0.5-df.2"
+LATEST_44="v4.4.9-df.2"
+LATEST_43="v4.3.11-df.2"
+LATEST_42="v4.2.3-df.2"
+LATEST_41="v4.1.2-df.2"
+LATEST_40="v4.0.6-df.2"
+LATEST_30="v3.0.18-df.2"
+LATEST_20="v2.0.1-df.2"
+LATEST_10="v1.0.0-df.2"
 
 PHP_VER="${PHP_VER:-8.4}"
 for arg in "$@"; do
@@ -43,6 +44,7 @@ for arg in "$@"; do
 done
 
 case "${PHP_VER}" in
+  8.7|master) DEFAULT_VERSION="${LATEST_87}" ;;
   8.6) DEFAULT_VERSION="${LATEST_86}" ;;
   8.5) DEFAULT_VERSION="${LATEST_85}" ;;
   8.4) DEFAULT_VERSION="${LATEST_84}" ;;
@@ -124,13 +126,37 @@ if [ -n "${LOCAL_TARBALL:-}" ]; then
   cp "${LOCAL_TARBALL}" "${TMP_DIR}/${TARBALL_NAME}"
 else
   echo "--> Downloading ${TARBALL_NAME}..."
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "${DOWNLOAD_URL}" -o "${TMP_DIR}/${TARBALL_NAME}"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -q "${DOWNLOAD_URL}" -O "${TMP_DIR}/${TARBALL_NAME}"
-  else
-    echo "Error: Neither curl nor wget found. Please install curl or wget."
-    exit 1
+  download_pkg() {
+    local url="$1"
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL "${url}" -o "${TMP_DIR}/${TARBALL_NAME}"
+    elif command -v wget >/dev/null 2>&1; then
+      wget -q "${url}" -O "${TMP_DIR}/${TARBALL_NAME}"
+    else
+      echo "Error: Neither curl nor wget found. Please install curl or wget."
+      exit 1
+    fi
+  }
+  if ! download_pkg "${DOWNLOAD_URL}"; then
+    SERIES_MATCH="${PHP_VER}"
+    [ "${SERIES_MATCH}" = "master" ] && SERIES_MATCH="8.7"
+    API_URL="https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100"
+    FALLBACK_TAG=""
+    if command -v curl >/dev/null 2>&1; then
+      FALLBACK_TAG="$(curl -fsSL "${API_URL}" 2>/dev/null | grep -oE "\"tag_name\":[[:space:]]*\"v${SERIES_MATCH//./\\.}\\.[^\"]+\"" | head -n 1 | sed -E 's/.*"([^"]+)"/\1/' || true)"
+    elif command -v wget >/dev/null 2>&1; then
+      FALLBACK_TAG="$(wget -qO- "${API_URL}" 2>/dev/null | grep -oE "\"tag_name\":[[:space:]]*\"v${SERIES_MATCH//./\\.}\\.[^\"]+\"" | head -n 1 | sed -E 's/.*"([^"]+)"/\1/' || true)"
+    fi
+    if [ -n "${FALLBACK_TAG}" ] && [ "${FALLBACK_TAG}" != "${VERSION}" ]; then
+      VERSION="${FALLBACK_TAG}"
+      TARBALL_NAME="php-digitsflow-${VERSION}-linux-${ARCH}.tar.gz"
+      DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/${TARBALL_NAME}"
+      echo "--> Resolved active series release ${VERSION}; downloading ${TARBALL_NAME}..."
+      download_pkg "${DOWNLOAD_URL}"
+    else
+      echo "Error: Failed to download ${DOWNLOAD_URL}"
+      exit 1
+    fi
   fi
 fi
 
