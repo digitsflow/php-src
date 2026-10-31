@@ -1864,7 +1864,7 @@ PHP_FUNCTION(socket_set_option)
 
 			if (Z_TYPE_P(arg4) != IS_ARRAY) {
 				if (UNEXPECTED(Z_TYPE_P(arg4) != IS_OBJECT)) {
-					zend_argument_type_error(4, "must be of type array when argument #3 ($option) is SO_LINGER, %s given", zend_zval_value_name(arg4));
+					zend_argument_type_error(4, "must be of type array when argument #3 ($option) is SO_LINGER, %s given", zend_zval_type_name(arg4));
 					RETURN_THROWS();
 				} else {
 					opt_props = zend_get_properties_for(arg4, ZEND_PROP_PURPOSE_ARRAY_CAST);
@@ -1916,7 +1916,7 @@ PHP_FUNCTION(socket_set_option)
 				if (UNEXPECTED(Z_TYPE_P(arg4) != IS_OBJECT)) {
 					zend_argument_type_error(4, "must be of type array when argument #3 ($option) is %s, %s given",
 							optname == SO_RCVTIMEO ? "SO_RCVTIMEO" : "SO_SNDTIMEO",
-							zend_zval_value_name(arg4));
+							zend_zval_type_name(arg4));
 					RETURN_THROWS();
 				} else {
 					opt_props = zend_get_properties_for(arg4, ZEND_PROP_PURPOSE_ARRAY_CAST);
