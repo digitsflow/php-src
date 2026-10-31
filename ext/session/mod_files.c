@@ -151,7 +151,7 @@ static void ps_files_close(ps_files *data)
 	}
 }
 
-static void ps_files_open(ps_files *data, const char *key)
+static void ps_files_open(ps_files *data, const zend_string *key)
 {
 	char buf[MAXPATHLEN];
 #if !defined(O_NOFOLLOW) || !defined(PHP_WIN32)
@@ -159,7 +159,7 @@ static void ps_files_open(ps_files *data, const char *key)
 #endif
 	int ret;
 
-	if (data->fd < 0 || !data->lastkey || strcmp(key, data->lastkey)) {
+	if (data->fd < 0 || !data->lastkey || strcmp(ZSTR_VAL(key), data->lastkey)) {
 		if (data->lastkey) {
 			efree(data->lastkey);
 			data->lastkey = NULL;
@@ -167,17 +167,17 @@ static void ps_files_open(ps_files *data, const char *key)
 
 		ps_files_close(data);
 
-		if (php_session_valid_key(key) == FAILURE) {
+		if (php_session_valid_key_ex(key) == FAILURE) {
 			php_error_docref(NULL, E_WARNING, "Session ID is too long or contains illegal characters. Only the A-Z, a-z, 0-9, \"-\", and \",\" characters are allowed");
 			return;
 		}
 
-		if (!ps_files_path_create(buf, sizeof(buf), data, key)) {
+		if (!ps_files_path_create(buf, sizeof(buf), data, ZSTR_VAL(key))) {
 			php_error_docref(NULL, E_WARNING, "Failed to create session data file path. Too short session ID, invalid save_path or path length exceeds %d characters", MAXPATHLEN);
 			return;
 		}
 
-		data->lastkey = estrdup(key);
+		data->lastkey = estrdup(ZSTR_VAL(key));
 
 		int open_flags = O_CREAT | O_RDWR | O_BINARY;
 #ifdef O_NOFOLLOW
@@ -237,7 +237,7 @@ static int ps_files_write(ps_files *data, zend_string *key, zend_string *val)
 	/* PS(id) may be changed by calling session_regenerate_id().
 	   Re-initialization should be tried here. ps_files_open() checks
        data->lastkey and reopen when it is needed. */
-	ps_files_open(data, ZSTR_VAL(key));
+	ps_files_open(data, key);
 	if (data->fd < 0) {
 		return FAILURE;
 	}
@@ -480,7 +480,7 @@ PS_READ_FUNC(files)
 	zend_stat_t sbuf;
 	PS_FILES_DATA;
 
-	ps_files_open(data, ZSTR_VAL(key));
+	ps_files_open(data, key);
 	if (data->fd < 0) {
 		return FAILURE;
 	}
@@ -711,6 +711,10 @@ PS_CREATE_SID_FUNC(files)
 PS_VALIDATE_SID_FUNC(files)
 {
 	PS_FILES_DATA;
+
+	if (php_session_valid_key_ex(key) == FAILURE) {
+		return FAILURE;
+	}
 
 	return ps_files_key_exists(data, ZSTR_VAL(key));
 }
