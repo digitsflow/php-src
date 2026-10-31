@@ -494,6 +494,13 @@ PHPAPI void php_var_export_ex(zval *struc, int level, smart_str *buf) /* {{{ */
 	zend_string *key;
 	zval *val;
 
+#ifdef ZEND_CHECK_STACK_LIMIT
+	if (UNEXPECTED(zend_call_stack_overflowed(EG(stack_limit)))) {
+		zend_call_stack_size_error();
+		return;
+	}
+#endif
+
 again:
 	switch (Z_TYPE_P(struc)) {
 		case IS_FALSE:
@@ -548,6 +555,9 @@ again:
 			smart_str_appendl(buf, "array (\n", 8);
 			ZEND_HASH_FOREACH_KEY_VAL(myht, index, key, val) {
 				php_array_element_export(val, index, key, level, buf);
+				if (UNEXPECTED(EG(exception))) {
+					break;
+				}
 			} ZEND_HASH_FOREACH_END();
 			if (!(GC_FLAGS(myht) & GC_IMMUTABLE)) {
 				GC_UNPROTECT_RECURSION(myht);
@@ -602,6 +612,9 @@ again:
 				if (!is_enum) {
 					ZEND_HASH_FOREACH_KEY_VAL_IND(myht, index, key, val) {
 						php_object_element_export(val, index, key, level, buf);
+						if (UNEXPECTED(EG(exception))) {
+							break;
+						}
 					} ZEND_HASH_FOREACH_END();
 				}
 				zend_release_properties(myht);

@@ -787,6 +787,10 @@ static int curl_ssh_hostkeyfunction(void *clientp, int keytype, const char *key,
 	php_curl_callback *t = ch->handlers.sshhostkey;
 	int rval = CURLKHMATCH_MISMATCH; /* cancel connection in case of an exception */
 
+	if (!t || Z_ISUNDEF(t->func_name)) {
+		return rval;
+	}
+
 #if PHP_CURL_DEBUG
 	fprintf(stderr, "curl_ssh_hostkeyfunction() called\n");
 	fprintf(stderr, "clientp = %x, keytype = %d, key = %s, keylen = %zu\n", clientp, keytype, key, keylen);
@@ -1233,8 +1237,11 @@ static void _php_copy_callback(php_curl *ch, php_curl_callback **new_callback, p
 		if (!Z_ISUNDEF(source_callback->func_name)) {
 			ZVAL_COPY(&(*new_callback)->func_name, &source_callback->func_name);
 		}
-		curl_easy_setopt(ch->cp, option, (void *) ch);
 	}
+
+	/* The callback data (i.e. pointer to the curl handle) stays even if a user callback
+	 * is reset to NULL. Ensure the data pointer always points to the new handle. */
+	curl_easy_setopt(ch->cp, option, (void *) ch);
 }
 
 void _php_setup_easy_copy_handlers(php_curl *ch, php_curl *source)
@@ -1254,6 +1261,10 @@ void _php_setup_easy_copy_handlers(php_curl *ch, php_curl *source)
 		Z_ADDREF(source->handlers.write_header->stream);
 	}
 	ch->handlers.write_header->stream = source->handlers.write_header->stream;
+	if (!Z_ISUNDEF(source->handlers.std_err)) {
+		Z_ADDREF(source->handlers.std_err);
+	}
+	ch->handlers.std_err = source->handlers.std_err;
 
 	ch->handlers.write->fp = source->handlers.write->fp;
 	ch->handlers.write_header->fp = source->handlers.write_header->fp;

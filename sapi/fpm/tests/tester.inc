@@ -2,10 +2,7 @@
 
 namespace FPM;
 
-use FPM\FastCGI\Client;
-use FPM\FastCGI\SocketTransport;
-use FPM\FastCGI\StreamTransport;
-use FPM\FastCGI\Transport;
+use Adoy\FastCGI\Client;
 
 require_once 'fcgi.inc';
 require_once 'logreader.inc';
@@ -67,11 +64,6 @@ class Tester
      * @var array
      */
     private array $clients = [];
-
-    /**
-     * @var string
-     */
-    private string $clientTransport;
 
     /**
      * @var LogReader
@@ -350,31 +342,6 @@ class Tester
     }
 
     /**
-     * Skip test if supplied shell command fails.
-     *
-     * @param string $command
-     * @param string|null $expectedPartOfOutput
-     */
-    static public function skipIfShellCommandFails(string $command, string $expectedPartOfOutput = null)
-    {
-        $result = exec("$command 2>&1", $output, $code);
-        if ($result === false || $code) {
-            die("skip command '$command' faieled with code $code");
-        }
-        if (!is_null($expectedPartOfOutput)) {
-            if (is_array($output)) {
-                foreach ($output as $line) {
-                    if (str_contains($line, $expectedPartOfOutput)) {
-                        // string found so no need to skip
-                        return;
-                    }
-                }
-            }
-            die("skip command '$command' did not contain output '$expectedPartOfOutput'");
-        }
-    }
-
-    /**
      * Skip if posix extension not loaded.
      */
     static public function skipIfUserDoesNotExist($userName) {
@@ -398,34 +365,15 @@ class Tester
         string $code = '',
         array $options = [],
         string $fileName = null,
-        bool $debug = null,
-        string $clientTransport = 'stream'
+        bool $debug = null
     ) {
         $this->configTemplate = $configTemplate;
         $this->code           = $code;
         $this->options        = $options;
         $this->fileName       = $fileName ?: self::getCallerFileName();
-        if (($debugFilter = getenv('TEST_FPM_DEBUG_FILTER')) !== false) {
-            $this->debug = str_contains(basename($this->fileName), $debugFilter);
-        } else {
-            $this->debug = $debug !== null ? $debug : (bool)getenv('TEST_FPM_DEBUG');
-        }
-        $this->logReader       = new LogReader($this->debug);
-        $this->logTool         = new LogTool($this->logReader, $this->debug);
-        $this->clientTransport = $clientTransport;
-    }
-
-    /**
-     * Creates new client transport.
-     *
-     * @return Transport
-     */
-    private function createTransport()
-    {
-        return match ($this->clientTransport) {
-            'stream' => new StreamTransport(),
-            'socket' => new SocketTransport(),
-        };
+        $this->debug          = $debug !== null ? $debug : (bool)getenv('TEST_FPM_DEBUG');
+        $this->logReader      = new LogReader($this->debug);
+        $this->logTool        = new LogTool($this->logReader, $this->debug);
     }
 
     /**
@@ -444,60 +392,26 @@ class Tester
      * @return null|array
      * @throws \Exception
      */
-    public function testConfig(
-        $silent = false,
-        array|string|null $expectedPattern = null,
-        $dumpConfig = true,
-        $printOutput = false
-    ): ?array {
-        $configFile    = $this->createConfig();
-        $configTestArg = $dumpConfig ? '-tt' : '-t';
-        $cmd           = self::findExecutable() . " -n $configTestArg -y $configFile 2>&1";
+    public function testConfig($silent = false)
+    {
+        $configFile = $this->createConfig();
+        $cmd        = self::findExecutable() . ' -tt -y ' . $configFile . ' 2>&1';
         $this->trace('Testing config using command', $cmd, true);
         exec($cmd, $output, $code);
-        if ($printOutput) {
-            foreach ($output as $outputLine) {
-                echo $outputLine . "\n";
-            }
-        }
-        $found = 0;
-        if ($expectedPattern !== null) {
-            $expectedPatterns = is_array($expectedPattern) ? $expectedPattern : [$expectedPattern];
-        }
         if ($code) {
             $messages = [];
             foreach ($output as $outputLine) {
                 $message    = preg_replace("/\[.+?\]/", "", $outputLine, 1);
-                if ($expectedPattern !== null) {
-                    for ($i = 0; $i < count($expectedPatterns); $i++) {
-                        $pattern = $expectedPatterns[$i];
-                        if ($pattern !== null && preg_match($pattern, $message)) {
-                            $found++;
-                            $expectedPatterns[$i] = null;
-                        }
-                    }
-                }
                 $messages[] = $message;
                 if ( ! $silent) {
                     $this->error($message, null, false);
                 }
             }
-        } else {
-            $messages = null;
+
+            return $messages;
         }
 
-        if ($expectedPattern !== null && $found < count($expectedPatterns)) {
-            $missingPatterns = array_filter($expectedPatterns);
-            $errorMessage = sprintf(
-                "The expected config %s %s %s not been found",
-                count($missingPatterns) > 1 ? 'patterns' : 'pattern',
-                implode(', ', $missingPatterns),
-                count($missingPatterns) > 1 ? 'have' : 'has',
-            );
-            $this->error($errorMessage);
-        }
-
-        return $messages;
+        return null;
     }
 
     /**
@@ -524,7 +438,7 @@ class Tester
         $configFile = $this->createConfig();
         $desc       = $this->outDesc ? [] : [1 => array('pipe', 'w'), 2 => array('redirect', 1)];
 
-        $cmd = [self::findExecutable(), '-n', '-y', $configFile];
+        $cmd = [self::findExecutable(), '-y', $configFile];
 
         if ($forceStderr) {
             $cmd[] = '-O';
@@ -713,7 +627,8 @@ class Tester
         string $uri = null,
         string $scriptFilename = null,
         string $scriptName = null,
-        ?string $stdin = null
+        ?string $stdin = null,
+        ?string $method = null
     ): array {
         if (is_null($scriptFilename)) {
             $scriptFilename = $this->makeSourceFile();
@@ -728,7 +643,7 @@ class Tester
         $params = array_merge(
             [
                 'GATEWAY_INTERFACE' => 'FastCGI/1.0',
-                'REQUEST_METHOD'    => is_null($stdin) ? 'GET' : 'POST',
+                'REQUEST_METHOD'    => $method ?? (is_null($stdin) ? 'GET' : 'POST'),
                 'SCRIPT_FILENAME'   => $scriptFilename === '' ? null : $scriptFilename,
                 'SCRIPT_NAME'       => $scriptName,
                 'QUERY_STRING'      => $query,
@@ -826,13 +741,11 @@ class Tester
      * @param string|null       $successMessage
      * @param string|null       $errorMessage
      * @param bool              $connKeepAlive
-     * @param bool              $socketKeepAlive
      * @param string|null       $scriptFilename = null
      * @param string|null       $scriptName = null
      * @param string|array|null $stdin          = null
      * @param bool              $expectError
      * @param int               $readLimit
-     * @param int               $writeDelay
      *
      * @return Response
      * @throws \Exception
@@ -845,14 +758,13 @@ class Tester
         string $successMessage = null,
         string $errorMessage = null,
         bool $connKeepAlive = false,
-        bool $socketKeepAlive = false,
         string $scriptFilename = null,
         string $scriptName = null,
         string|array $stdin = null,
         bool $expectError = false,
         int $readLimit = -1,
-        int $writeDelay = 0,
         array $params = null,
+        ?string $method = null,
     ): Response {
         if ($this->hasError()) {
             return $this->createResponse(expectInvalid: true);
@@ -862,13 +774,12 @@ class Tester
             $stdin = $this->parseStdin($stdin, $headers);
         }
 
-        $params = $params ?? $this->getRequestParams($query, $headers, $uri, $scriptFilename, $scriptName, $stdin);
+        $params = $params ?? $this->getRequestParams($query, $headers, $uri, $scriptFilename, $scriptName, $stdin, $method);
         $this->trace('Request params', $params);
 
         try {
             $this->response = $this->createResponse(
-                $this->getClient($address, $connKeepAlive, $socketKeepAlive)
-                    ->request_data($params, $stdin, $readLimit, $writeDelay)
+                $this->getClient($address, $connKeepAlive)->request_data($params, $stdin, $readLimit)
             );
             if ($expectError) {
                 $this->error('Expected request error but the request was successful');
@@ -899,10 +810,8 @@ class Tester
      * @param string|null $address
      * @param string|null $successMessage
      * @param string|null $errorMessage
-     * @param bool        $socketKeepAlive
      * @param bool        $connKeepAlive
      * @param int         $readTimeout
-     * @param int         $writeDelay
      *
      * @return Response[]
      * @throws \Exception
@@ -913,9 +822,7 @@ class Tester
         string $successMessage = null,
         string $errorMessage = null,
         bool $connKeepAlive = false,
-        bool $socketKeepAlive = false,
-        int $readTimeout = 0,
-        int $writeDelay = 0,
+        int $readTimeout = 0
     ) {
         if (is_numeric($requests)) {
             $requests = array_fill(0, $requests, []);
@@ -926,27 +833,23 @@ class Tester
         }
 
         try {
-            $connections = array_map(
-                function ($requestData) use ($address, $connKeepAlive, $socketKeepAlive, $writeDelay) {
-                    $client = $this->getClient($address, $connKeepAlive, $socketKeepAlive);
-                    $params = $this->getRequestParams(
-                        $requestData['query'] ?? '',
-                        $requestData['headers'] ?? [],
-                        $requestData['uri'] ?? null
-                    );
-                    $this->trace('Request params', $params);
+            $connections = array_map(function ($requestData) use ($address, $connKeepAlive) {
+                $client = $this->getClient($address, $connKeepAlive);
+                $params = $this->getRequestParams(
+                    $requestData['query'] ?? '',
+                    $requestData['headers'] ?? [],
+                    $requestData['uri'] ?? null
+                );
 
-                    if (isset($requestData['delay'])) {
-                        usleep($requestData['delay']);
-                    }
+                if (isset($requestData['delay'])) {
+                    usleep($requestData['delay']);
+                }
 
-                    return [
-                        'client'    => $client,
-                        'requestId' => $client->async_request($params, false, $writeDelay),
-                    ];
-                },
-                $requests
-            );
+                return [
+                    'client'    => $client,
+                    'requestId' => $client->async_request($params, false),
+                ];
+            }, $requests);
 
             $responses = array_map(function ($conn) use ($readTimeout) {
                 $response = $this->createResponse(
@@ -977,15 +880,13 @@ class Tester
      *
      * @param string|null $address
      * @param bool        $connKeepAlive
-     * @param bool        $socketKeepAlive
      *
      * @return ValuesResponse
      * @throws \Exception
      */
     public function requestValues(
         string $address = null,
-        bool $connKeepAlive = false,
-        bool $socketKeepAlive = false
+        bool $connKeepAlive = false
     ): ValuesResponse {
         if ($this->hasError()) {
             return $this->createValueResponse();
@@ -1010,16 +911,12 @@ class Tester
      * Get client.
      *
      * @param string|null $address
-     * @param bool        $connKeepAlive
-     * @param bool        $socketKeepAlive
+     * @param bool        $keepAlive
      *
      * @return Client
      */
-    private function getClient(
-        string $address = null,
-        bool $connKeepAlive = false,
-        bool $socketKeepAlive = false
-    ): Client {
+    private function getClient(string $address = null, $keepAlive = false): Client
+    {
         $address = $address ? $this->processTemplate($address) : $this->getAddr();
         if ($address[0] === '/') { // uds
             $host = 'unix://' . $address;
@@ -1039,16 +936,13 @@ class Tester
             $port         = $addressParts[1] ?? $this->getPort();
         }
 
-        if ($socketKeepAlive) {
-            $connKeepAlive = true;
-        }
-        if ( ! $connKeepAlive) {
-            return new Client($host, $port, $this->createTransport());
+        if ( ! $keepAlive) {
+            return new Client($host, $port);
         }
 
         if ( ! isset($this->clients[$host][$port])) {
-            $client = new Client($host, $port, $this->createTransport());
-            $client->setKeepAlive($connKeepAlive, $socketKeepAlive);
+            $client = new Client($host, $port);
+            $client->setKeepAlive(true);
             $this->clients[$host][$port] = $client;
         }
 
@@ -1129,6 +1023,9 @@ class Tester
     {
         if (is_null($pid)) {
             $pid = $this->getPid();
+            if ($pid === 0) {
+                return '';
+            }
         }
         $cmd = "kill -$signal $pid";
         $this->trace('Sending signal using command', $cmd, true);
@@ -1310,19 +1207,9 @@ class Tester
                 return $address;
             }
 
-            $addressPart = hash('crc32', dirname($address)) . '-' . basename($address);
-
-            // is longer on Mac, than on Linux
-            $tmpDirAddress = sys_get_temp_dir() . '/' . $addressPart;
-                   ;
-
-            if (strlen($tmpDirAddress) <= 104) {
-                return $tmpDirAddress;
-            }
-
-            $srcRootAddress = dirname(__DIR__, 3) . '/' . $addressPart;
-
-            return $srcRootAddress;
+            return sys_get_temp_dir() . '/' .
+                   hash('crc32', dirname($address)) . '-' .
+                   basename($address);
         }
 
         return $this->getHost($type) . ':' . $port;

@@ -3147,6 +3147,10 @@ PHPAPI bool php_array_data_shuffle(const php_random_algo *algo, php_random_statu
 				j++;
 			}
 		}
+		/* Truncate the stale slots left by compaction before the engine can throw. */
+		hash->nNumUsed = n_elems;
+		hash->nInternalPointer = 0;
+		hash->nNextFreeElement = n_elems;
 		while (--n_left) {
 			rnd_idx = algo->range(status, 0, n_left);
 			if (EG(exception)) {
@@ -3175,6 +3179,9 @@ PHPAPI bool php_array_data_shuffle(const php_random_algo *algo, php_random_statu
 				j++;
 			}
 		}
+		hash->nNumUsed = n_elems;
+		hash->nInternalPointer = 0;
+		hash->nNextFreeElement = n_elems;
 		while (--n_left) {
 			rnd_idx = algo->range(status, 0, n_left);
 			if (EG(exception)) {
@@ -3188,9 +3195,6 @@ PHPAPI bool php_array_data_shuffle(const php_random_algo *algo, php_random_statu
 			}
 		}
 	}
-	hash->nNumUsed = n_elems;
-	hash->nInternalPointer = 0;
-	hash->nNextFreeElement = n_elems;
 
 	return true;
 }
