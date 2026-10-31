@@ -760,12 +760,14 @@ static inline zend_long safe_shift_left(zend_long n, zend_long s) {
 }
 
 static inline bool shift_left_overflows(zend_long n, zend_long s) {
-	/* This considers shifts that shift in the sign bit to be overflowing as well */
-	if (n >= 0) {
-		return s >= SIZEOF_ZEND_LONG * 8 - 1 || safe_shift_left(n, s) < n;
-	} else {
-		return s >= SIZEOF_ZEND_LONG * 8 || safe_shift_left(n, s) > n;
+	if (UNEXPECTED((zend_ulong)s >= SIZEOF_ZEND_LONG * 8)) {
+		return true;
 	}
+	if (UNEXPECTED(s == SIZEOF_ZEND_LONG * 8 - 1)) {
+		return n != 0 && n != -1;
+	}
+	zend_long shifted = (zend_long)((zend_ulong)n << (zend_ulong)s);
+	return (shifted >> s) != n;
 }
 
 /* If b does not divide a exactly, return the two adjacent values between which the real result
@@ -2468,7 +2470,7 @@ static const zend_property_info *zend_fetch_static_prop_info(const zend_script *
 	const zend_property_info *prop_info = NULL;
 	if (opline->op1_type == IS_CONST) {
 		const zend_class_entry *ce = NULL;
-		if (opline->op2_type == IS_UNUSED) {
+		if (opline->op2_type == IS_UNUSED && !(op_array->fn_flags & ZEND_ACC_TRAIT_CLONE)) {
 			uint32_t fetch_type = opline->op2.num & ZEND_FETCH_CLASS_MASK;
 			switch (fetch_type) {
 				case ZEND_FETCH_CLASS_SELF:
@@ -5256,7 +5258,20 @@ ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op
 					zend_hash_find_ptr(&ce->properties_info, prop_name);
 				if (prop_info) {
 					if (ZEND_TYPE_IS_SET(prop_info->type)) {
-						return 1;
+						uint32_t type_mask = ZEND_TYPE_PURE_MASK(prop_info->type);
+
+						/* The assignment can't fail if the property only accepts a single scalar type
+						 * and the value already has this type: the old value has no destructor.
+						 * If the property holds a reference, all its type sources accept this type because they accept the current value. */
+						if ((prop_info->flags & (ZEND_ACC_READONLY|ZEND_ACC_PPP_SET_MASK))
+						 || prop_info->hooks
+						 || ZEND_TYPE_IS_COMPLEX(prop_info->type)
+						 || (type_mask & ~(MAY_BE_NULL|MAY_BE_BOOL|MAY_BE_LONG|MAY_BE_DOUBLE|MAY_BE_STRING))
+						 /* single type, this excludes bool too as a reference can exist to true or false standalone types. */
+						 || (type_mask & (type_mask - 1))
+						 || (OP1_DATA_INFO() & (MAY_BE_ANY|MAY_BE_UNDEF|MAY_BE_REF)) != type_mask) {
+							return 1;
+						}
 					}
 					return !(prop_info->flags & ZEND_ACC_PUBLIC)
 						&& prop_info->ce != op_array->scope;

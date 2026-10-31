@@ -544,6 +544,13 @@ PHPAPI zend_result php_var_export_ex(zval *struc, int level, smart_str *buf) /* 
 	zend_string *key;
 	zval *val;
 
+#ifdef ZEND_CHECK_STACK_LIMIT
+	if (UNEXPECTED(zend_call_stack_overflowed(EG(stack_limit)))) {
+		zend_call_stack_size_error();
+		return FAILURE;
+	}
+#endif
+
 again:
 	switch (Z_TYPE_P(struc)) {
 		case IS_FALSE:
@@ -674,9 +681,14 @@ again:
 								return FAILURE;
 							}
 						}
-						php_object_element_export(val, index, key, level, buf);
+						zend_result result = php_object_element_export(val, index, key, level, buf);
 						if (val == &tmp) {
 							zval_ptr_dtor(val);
+						}
+						if (UNEXPECTED(result == FAILURE)) {
+							ZEND_GUARD_OR_GC_UNPROTECT_RECURSION(guard, EXPORT, zobj);
+							zend_release_properties(myht);
+							return FAILURE;
 						}
 					} ZEND_HASH_FOREACH_END();
 				}
@@ -1124,6 +1136,8 @@ static void php_var_serialize_intern(smart_str *buf, zval *struc, php_serialize_
 	zend_long var_already;
 	HashTable *myht;
 
+	ZEND_ASSERT(var_hash != NULL);
+
 	if (EG(exception)) {
 		return;
 	}
@@ -1132,7 +1146,7 @@ static void php_var_serialize_intern(smart_str *buf, zval *struc, php_serialize_
 		return;
 	}
 
-	if (var_hash && (var_already = php_add_var_hash(var_hash, struc, in_rcn_array))) {
+	if ((var_already = php_add_var_hash(var_hash, struc, in_rcn_array))) {
 		if (var_already == -1) {
 			/* Reference to an object that failed to serialize, replace with null. */
 			smart_str_appendl(buf, "N;", 2);

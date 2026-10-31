@@ -71,6 +71,8 @@ PHP                                                                        NEWS
 
 - MySQLnd:
   . Fixed field_count not resetting on OK packet. (Kamil Tekiela)
+  . Fixed bug GH-24609 (OK packets without an info message rejected on x32
+    builds). (lazerg)
 
 - Opcache:
   . Fixed range inference of assignments through typed references.
@@ -79,6 +81,7 @@ PHP                                                                        NEWS
     loop-invariant addition). (Ilia Alshanetsky)
   . Fixed OSS-Fuzz #545352966 (default value AST of an SHM-persisted partial).
     (ndossche)
+  . Fixed JIT ignoring exceptions from typed property set hooks. (David Carlier)
 
 - PDO:
   . Fixed PDOStatement::getColumnMeta() reading out of bounds for an invalid
