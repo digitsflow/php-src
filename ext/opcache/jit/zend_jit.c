@@ -4397,6 +4397,8 @@ static int zend_jit_restart_hot_counters(zend_op_array *op_array)
 	uint32_t i;
 
 	jit_extension = (zend_jit_op_array_hot_extension*)ZEND_FUNC_INFO(op_array);
+	/* The JIT-ed code is gone, so allow compiling it again */
+	jit_extension->func_info.flags &= ~ZEND_FUNC_JITED;
 	for (i = 0; i < op_array->last; i++) {
 		op_array->opcodes[i].handler = jit_extension->orig_handlers[i];
 	}
@@ -5039,16 +5041,15 @@ ZEND_EXT_API int zend_jit_startup(void *buf, size_t size, bool reattached)
 		return FAILURE;
 	}
 
-	zend_jit_unprotect();
 #if ZEND_JIT_TARGET_ARM64
+	zend_jit_unprotect();
 	/* reserve space for global labels veneers */
 	dasm_labels_veneers = *dasm_ptr;
 	*dasm_ptr = (void**)*dasm_ptr + ZEND_MM_ALIGNED_SIZE_EX(zend_lb_MAX, DASM_ALIGNMENT);
 	memset(dasm_labels_veneers, 0, sizeof(void*) * ZEND_MM_ALIGNED_SIZE_EX(zend_lb_MAX, DASM_ALIGNMENT));
-#endif
-	/* save JIT buffer pos */
-	dasm_ptr[1] = dasm_ptr[0];
 	zend_jit_protect();
+#endif
+	zend_jit_save_restart_point();
 
 	return SUCCESS;
 }
@@ -5241,6 +5242,17 @@ ZEND_EXT_API void zend_jit_restart(void)
 			zend_jit_disasm_init();
 		}
 #endif
+	}
+}
+
+/* Saves the current JIT buffer position as the one zend_jit_restart() rewinds to,
+ * so that the code generated so far is kept across restarts */
+ZEND_EXT_API void zend_jit_save_restart_point(void)
+{
+	if (dasm_ptr) {
+		zend_jit_unprotect();
+		dasm_ptr[1] = dasm_ptr[0];
+		zend_jit_protect();
 	}
 }
 

@@ -137,12 +137,17 @@ static inline void zlog_external(
 		int flags, char *buf, size_t buf_size, const char *fmt, va_list args) /* {{{ */
 {
 	va_list ap;
+	int written;
 	size_t len;
 
 	va_copy(ap, args);
-	len = vsnprintf(buf, buf_size, fmt, ap);
+	written = vsnprintf(buf, buf_size, fmt, ap);
 	va_end(ap);
 
+	if (written < 0) {
+		return;
+	}
+	len = (size_t) written;
 	if (len >= buf_size) {
 		len = zlog_truncate_buf(buf, buf_size, 0);
 	}
@@ -210,28 +215,39 @@ void vzlog(const char *function, int line, int flags, const char *fmt, va_list a
 
 	saved_errno = errno;
 	len = zlog_buf_prefix(function, line, flags, buf, buf_size, zlog_fd == ZLOG_SYSLOG);
+	size_t max_len = (zlog_limit > 0 && (size_t) zlog_limit < buf_size) ? (size_t) zlog_limit : buf_size;
 
-	if (len > buf_size - 1) {
+	if (len >= max_len) {
 		truncated = 1;
 	} else {
-		len += vsnprintf(buf + len, buf_size - len, fmt, args);
-		if (len >= buf_size) {
-			truncated = 1;
-		}
-	}
-
-	if (!truncated) {
-		if (flags & ZLOG_HAVE_ERRNO) {
-			len += snprintf(buf + len, buf_size - len,
-					": %s (%d)", strerror(saved_errno), saved_errno);
-			if (len >= zlog_limit) {
+		int written = vsnprintf(buf + len, buf_size - len, fmt, args);
+		if (written < 0) {
+			buf[len] = '\0';
+		} else {
+			len += (size_t) written;
+			if (len >= max_len) {
 				truncated = 1;
 			}
 		}
 	}
 
+	if (!truncated) {
+		if (flags & ZLOG_HAVE_ERRNO) {
+			int written = snprintf(buf + len, buf_size - len,
+					": %s (%d)", strerror(saved_errno), saved_errno);
+			if (written < 0) {
+				buf[len] = '\0';
+			} else {
+				len += (size_t) written;
+				if (len >= max_len) {
+					truncated = 1;
+				}
+			}
+		}
+	}
+
 	if (truncated) {
-		len = zlog_truncate_buf(buf, zlog_limit < buf_size ? zlog_limit : buf_size, 1);
+		len = zlog_truncate_buf(buf, max_len, 1);
 	}
 
 #ifdef HAVE_SYSLOG_H
@@ -584,6 +600,7 @@ zlog_bool zlog_stream_set_msg_prefix(struct zlog_stream *stream, const char *fmt
 {
 	char buf[MAX_WRAPPING_PREFIX_LENGTH];
 	size_t len;
+	int written;
 	va_list args;
 
 	if (!stream->decorate) {
@@ -591,8 +608,15 @@ zlog_bool zlog_stream_set_msg_prefix(struct zlog_stream *stream, const char *fmt
 	}
 
 	va_start(args, fmt);
-	len = vsnprintf(buf, MAX_WRAPPING_PREFIX_LENGTH - 1, fmt, args);
+	written = vsnprintf(buf, sizeof(buf), fmt, args);
 	va_end(args);
+
+	if (written < 0) {
+		return ZLOG_FALSE;
+	}
+	/* Use only what was written to buf, and keep at least half of the log line
+	 * for the time and level prefix and the message itself. */
+	len = MIN((size_t) written, MIN(sizeof(buf) - 1, (size_t) zlog_limit / 2));
 
 	if (stream->msg_prefix_len < len) {
 		stream->msg_prefix = stream->msg_prefix_len ? realloc(stream->msg_prefix, len + 1) : malloc(len + 1);
@@ -604,7 +628,7 @@ zlog_bool zlog_stream_set_msg_prefix(struct zlog_stream *stream, const char *fmt
 	stream->msg_prefix[len] = 0;
 	stream->msg_prefix_len = len;
 
-	return len;
+	return ZLOG_TRUE;
 }
 /* }}} */
 
@@ -721,9 +745,17 @@ ssize_t zlog_stream_prefix_ex(struct zlog_stream *stream, const char *function, 
 ssize_t zlog_stream_vformat(struct zlog_stream *stream, const char *fmt, va_list args) /* {{{ */
 {
 	char sbuf[1024];
+	int written;
 	size_t len;
 
-	len = vsnprintf(sbuf, 1024, fmt, args);
+	written = vsnprintf(sbuf, sizeof(sbuf), fmt, args);
+	if (written < 0) {
+		return -1;
+	}
+	len = (size_t) written;
+	if (len >= sizeof(sbuf)) {
+		len = sizeof(sbuf) - 1;
+	}
 
 	return zlog_stream_str(stream, sbuf, len);
 }
