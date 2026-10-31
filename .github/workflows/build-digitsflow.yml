@@ -219,13 +219,25 @@ jobs:
       - name: Publish Verified Multi-Arch Release (on Tag)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             TAG_NAME="${GITHUB_REF#refs/tags/}"
-            if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-              gh release create "$TAG_NAME" --target "${GITHUB_SHA}" --generate-notes --title "Digitsflow PHP $TAG_NAME" || true
+            if ! gh release view "$TAG_NAME" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              if ! gh release create "$TAG_NAME" "$TARBALL_X64" "$TARBALL_ARM64" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --target "${GITHUB_SHA}" \
+                --title "Digitsflow PHP ${TAG_NAME}" \
+                --generate-notes; then
+                gh release create "$TAG_NAME" "$TARBALL_X64" "$TARBALL_ARM64" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --target "${GITHUB_SHA}" \
+                  --title "Digitsflow PHP ${TAG_NAME}" \
+                  --notes "Verified multi-arch Digitsflow PHP ${TAG_NAME} release (Linux x86_64 & aarch64)."
+              fi
+            else
+              gh release upload "$TAG_NAME" "$TARBALL_X64" "$TARBALL_ARM64" --repo "${GITHUB_REPOSITORY}" --clobber
             fi
-            gh release upload "$TAG_NAME" "$TARBALL_X64" "$TARBALL_ARM64" --clobber
             SERIES_PREFIX=$(echo "$TAG_NAME" | sed -E 's/^(v[0-9]+\.[0-9]+\.).*/\1/')
             for old_rel in $(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate --jq '.[].tag_name' 2>/dev/null || true); do
               if [[ "$old_rel" == "${SERIES_PREFIX}"* ]] && [[ "$old_rel" != "$TAG_NAME" ]]; then
