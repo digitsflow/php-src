@@ -576,13 +576,26 @@ static inline int parse_unix_address(php_stream_xport_param *xparam, struct sock
 }
 #endif
 
+static inline bool parse_port(const char *str, int *portno)
+{
+	/* Like atoi(), but reject ports that do not fit in 16 bits */
+	zend_long port = ZEND_STRTOL(str, NULL, 10);
+	if (port < 0 || port > 65535) {
+		return false;
+	}
+	*portno = (int) port;
+	return true;
+}
+
 static inline char *parse_ip_address_ex(const char *str, size_t str_len, int *portno, int get_err, zend_string **err)
 {
 	char *colon;
 	char *host = NULL;
 
 	if (memchr(str, '\0', str_len)) {
-		*err = ZSTR_INIT_LITERAL("The hostname must not contain null bytes", 0);
+		if (get_err && err) {
+			*err = ZSTR_INIT_LITERAL("The hostname must not contain null bytes", 0);
+		}
 		return NULL;
 	}
 
@@ -596,7 +609,12 @@ static inline char *parse_ip_address_ex(const char *str, size_t str_len, int *po
 			}
 			return NULL;
 		}
-		*portno = atoi(p + 2);
+		if (!parse_port(p + 2, portno)) {
+			if (get_err) {
+				*err = strpprintf(0, "Failed to parse port of address \"%s\"", str);
+			}
+			return NULL;
+		}
 		return estrndup(str + 1, p - str - 1);
 	}
 #endif
@@ -606,7 +624,12 @@ static inline char *parse_ip_address_ex(const char *str, size_t str_len, int *po
 		colon = NULL;
 	}
 	if (colon) {
-		*portno = atoi(colon + 1);
+		if (!parse_port(colon + 1, portno)) {
+			if (get_err) {
+				*err = strpprintf(0, "Failed to parse port of address \"%s\"", str);
+			}
+			return NULL;
+		}
 		host = estrndup(str, colon - str);
 	} else {
 		if (get_err) {
@@ -753,7 +776,7 @@ static inline int php_tcp_sockop_connect(php_stream *stream, php_netstream_data_
 			efree(host);
 			return -1;
 		}
-		bindto = parse_ip_address_ex(Z_STRVAL_P(tmpzval), Z_STRLEN_P(tmpzval), &bindport, xparam->want_errortext, &xparam->outputs.error_text);
+		bindto = parse_ip_address_ex(Z_STRVAL_P(tmpzval), Z_STRLEN_P(tmpzval), &bindport, 0, NULL);
 	}
 
 #ifdef SO_BROADCAST
