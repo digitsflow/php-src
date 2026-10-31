@@ -496,7 +496,7 @@ PHPAPI void php_var_export_ex(zval *struc, int level, smart_str *buf) /* {{{ */
 
 #ifdef ZEND_CHECK_STACK_LIMIT
 	if (UNEXPECTED(zend_call_stack_overflowed(EG(stack_limit)))) {
-		zend_call_stack_size_error();
+		zend_throw_error(NULL, "Maximum call stack size reached. Infinite recursion?");
 		return;
 	}
 #endif
@@ -648,7 +648,9 @@ PHPAPI void php_var_export(zval *struc, int level) /* {{{ */
 	smart_str buf = {0};
 	php_var_export_ex(struc, level, &buf);
 	smart_str_0(&buf);
-	PHPWRITE(ZSTR_VAL(buf.s), ZSTR_LEN(buf.s));
+	if (!EG(exception)) {
+		PHPWRITE(ZSTR_VAL(buf.s), ZSTR_LEN(buf.s));
+	}
 	smart_str_free(&buf);
 }
 /* }}} */
@@ -669,7 +671,10 @@ PHP_FUNCTION(var_export)
 	php_var_export_ex(var, 1, &buf);
 	smart_str_0 (&buf);
 
-	if (return_output) {
+	if (UNEXPECTED(EG(exception))) {
+		smart_str_free(&buf);
+		RETURN_THROWS();
+	} else if (return_output) {
 		RETURN_STR(smart_str_extract(&buf));
 	} else {
 		PHPWRITE(ZSTR_VAL(buf.s), ZSTR_LEN(buf.s));
