@@ -49,7 +49,7 @@ enum {
 #define DASM_POS2BIAS(pos)	((pos)&0xff000000)
 #define DASM_SEC2POS(sec)	((sec)<<24)
 #define DASM_POS2SEC(pos)	((pos)>>24)
-#define DASM_POS2PTR(D, pos)	(D->sections[DASM_POS2SEC(pos)].rbuf + (pos))
+#define DASM_POS2PTR(D, pos)	((int *)DASM_PTR_ADD(D->sections[DASM_POS2SEC(pos)].rbuf, (pos)))
 
 /* Action list type. */
 typedef const unsigned int *dasm_ActList;
@@ -230,7 +230,7 @@ void dasm_put(Dst_DECL, int start, ...)
   if (pos >= sec->epos) {
     DASM_M_GROW(Dst, int, sec->buf, sec->bsize,
       sec->bsize + 2*DASM_MAXSECPOS*sizeof(int));
-    sec->rbuf = sec->buf - DASM_POS2BIAS(pos);
+    sec->rbuf = DASM_PTR_SUB(sec->buf, DASM_POS2BIAS(pos));
     sec->epos = (int)sec->bsize/sizeof(int) - DASM_MAXSECPOS+DASM_POS2BIAS(pos);
   }
 
