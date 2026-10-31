@@ -762,12 +762,14 @@ static inline zend_long safe_shift_left(zend_long n, zend_long s) {
 }
 
 static inline bool shift_left_overflows(zend_long n, zend_long s) {
-	/* This considers shifts that shift in the sign bit to be overflowing as well */
-	if (n >= 0) {
-		return s >= SIZEOF_ZEND_LONG * 8 - 1 || safe_shift_left(n, s) < n;
-	} else {
-		return s >= SIZEOF_ZEND_LONG * 8 || safe_shift_left(n, s) > n;
+	if (UNEXPECTED((zend_ulong)s >= SIZEOF_ZEND_LONG * 8)) {
+		return true;
 	}
+	if (UNEXPECTED(s == SIZEOF_ZEND_LONG * 8 - 1)) {
+		return n != 0 && n != -1;
+	}
+	zend_long shifted = (zend_long)((zend_ulong)n << (zend_ulong)s);
+	return (shifted >> s) != n;
 }
 
 /* If b does not divide a exactly, return the two adjacent values between which the real result
@@ -4932,6 +4934,91 @@ ZEND_API zend_result zend_ssa_inference(zend_arena **arena, const zend_op_array 
 }
 /* }}} */
 
+static bool ssa_var_is_non_lazy_new_object(
+	const zend_op_array *op_array, const zend_ssa *ssa, int start_var, const zend_class_entry *ce)
+{
+	if (!ssa || !ssa->vars || !ssa->ops || start_var < 0) {
+		return false;
+	}
+	if (ssa->vars[start_var].escape_state == ESCAPE_STATE_NO_ESCAPE) {
+		return true;
+	}
+
+	int seen[8];
+	int count = 0;
+	int idx = 0;
+	seen[count++] = start_var;
+
+	while (idx < count) {
+		int v = seen[idx++];
+		if (ssa->vars[v].escape_state == ESCAPE_STATE_NO_ESCAPE) {
+			continue;
+		}
+
+		int next_vars[8];
+		int next_count = 0;
+
+		if (ssa->vars[v].definition >= 0) {
+			int def = ssa->vars[v].definition;
+			const zend_op *op = &op_array->opcodes[def];
+			const zend_ssa_op *sop = &ssa->ops[def];
+
+			if (op->opcode == ZEND_NEW && sop->result_def == v && !ce->constructor) {
+				continue;
+			} else if (op->opcode == ZEND_QM_ASSIGN && sop->result_def == v && sop->op1_use >= 0) {
+				next_vars[next_count++] = sop->op1_use;
+			} else if (op->opcode == ZEND_ASSIGN
+			 && (sop->op1_def == v || sop->result_def == v) && sop->op2_use >= 0) {
+				next_vars[next_count++] = sop->op2_use;
+			} else if (op->opcode != ZEND_ASSIGN && sop->op1_def == v && sop->op1_use >= 0) {
+				next_vars[next_count++] = sop->op1_use;
+			} else {
+				return false;
+			}
+		} else if (ssa->vars[v].definition_phi) {
+			const zend_ssa_phi *phi = ssa->vars[v].definition_phi;
+			if (phi->pi >= 0) {
+				if (phi->sources[0] < 0) {
+					return false;
+				}
+				next_vars[next_count++] = phi->sources[0];
+			} else {
+				uint32_t preds = ssa->cfg.blocks[phi->block].predecessors_count;
+				if (preds == 0 || preds > 8) {
+					return false;
+				}
+				for (uint32_t p = 0; p < preds; p++) {
+					if (phi->sources[p] < 0) {
+						return false;
+					}
+					next_vars[next_count++] = phi->sources[p];
+				}
+			}
+		} else {
+			return false;
+		}
+
+		for (int n = 0; n < next_count; n++) {
+			int cand = next_vars[n];
+			bool already = false;
+			for (int s = 0; s < count; s++) {
+				if (seen[s] == cand) {
+					already = true;
+					break;
+				}
+			}
+			if (!already) {
+				if (count >= 8) {
+					return false;
+				}
+				seen[count++] = cand;
+			}
+		}
+	}
+
+	return true;
+}
+
 ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op, const zend_op_array *op_array, const zend_ssa *ssa, uint32_t t1, uint32_t t2)
 {
 	if (opline->op1_type == IS_CV) {
@@ -5221,7 +5308,7 @@ ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op
 					return 1;
 				}
 			}
-			if (ssa_op->op1_use) {
+			if (ssa_op && ssa && ssa->var_info && ssa_op->op1_use >= 0) {
 				const zend_ssa_var_info *var_info = ssa->var_info + ssa_op->op1_use;
 				const zend_class_entry *ce = var_info->ce;
 
@@ -5245,10 +5332,17 @@ ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op
 					return 1;
 				}
 
+				if ((ce->type == ZEND_USER_CLASS || ce == zend_standard_class_def)
+				 && !ssa_var_is_non_lazy_new_object(op_array, ssa, ssa_op->op1_use, ce)) {
+					return 1;
+				}
+
 				zend_property_info *prop_info =
 					zend_hash_find_ptr(&ce->properties_info, prop_name);
 				if (prop_info) {
-					if (ZEND_TYPE_IS_SET(prop_info->type)) {
+					if ((prop_info->flags & (ZEND_ACC_STATIC|ZEND_ACC_READONLY|ZEND_ACC_PPP_SET_MASK))
+					 || prop_info->hooks
+					 || ZEND_TYPE_IS_SET(prop_info->type)) {
 						return 1;
 					}
 					return !(prop_info->flags & ZEND_ACC_PUBLIC)
