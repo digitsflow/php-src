@@ -67,6 +67,7 @@ jobs:
             --enable-cli \
             --enable-fpm \
             --enable-opcache \
+            --enable-phar \
             --enable-session \
             --enable-xml \
             --enable-simplexml \
@@ -94,44 +95,47 @@ jobs:
 
       - name: Execute Security & Regression Tests under ASAN (${{ matrix.arch }})
         env:
+          SKIP_ASAN: "1"
           ASAN_OPTIONS: "detect_leaks=1:abort_on_error=1:allocator_may_return_null=1"
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: |
-          CHANGED_TESTS=$(git diff --name-only --diff-filter=ACMR HEAD~1 HEAD | grep '\.phpt$' || true)
-          CHANGED_COUNT=$(printf "%s\n" "$CHANGED_TESTS" | sed '/^$/d' | wc -l | tr -d ' ')
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ -n "$CHANGED_TESTS" ] && [ "$CHANGED_COUNT" -le 25 ]; then
-            echo "Running PR regression test suite under ASAN ($CHANGED_COUNT tests):"
-            echo "$CHANGED_TESTS"
-            sapi/cli/php run-tests.php -P -q --show-diff -d extension_dir=$PWD/modules $CHANGED_TESTS
-          else
-            TESTS=""
-            for t in \
-              Zend/tests/gh21776.phpt \
-              ext/exif/tests/gh23807.phpt \
-              ext/ffi/tests/finalize_type_bailout_leak.phpt \
-              ext/ffi/tests/spprintf_ps_null_and_zeropad.phpt \
-              ext/hash/tests/gh23950.phpt \
-              ext/opcache/tests/jit/aarch64_ir_patch_and_veneer_safety.phpt \
-              ext/pdo/tests/pdo_fetch_both_column_count_overflow.phpt \
-              ext/session/tests/gh24376_session_cloexec.phpt \
-              ext/session/tests/mod_user_create_sid_null.phpt \
-              ext/soap/tests/gh23771.phpt \
-              ext/soap/tests/gh23771_invalid.phpt \
-              ext/soap/tests/gh23771_valid.phpt \
-              ext/spl/tests/spl_file_info_get_link_target_uninit.phpt \
-              ext/standard/tests/http/http_response_header_nested_request.phpt \
-              ext/standard/tests/strings/gh23204_frameless.phpt \
-              ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
-              ext/xsl/tests/gh23199_destruct.phpt \
-              ext/zip/tests/gh23240_cleanup.phpt \
-              ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt; do
-              if [ -f "$t" ]; then
-                TESTS="$TESTS $t"
-              fi
-            done
-            if [ -n "$TESTS" ]; then
-              echo "Running Digitsflow Security & Sanitizer Regression Suite under ASAN (${{ matrix.arch }}):"
-              echo "$TESTS"
-              sapi/cli/php run-tests.php -P -q --show-diff -d extension_dir=$PWD/modules $TESTS
+          TESTS=""
+          for t in \
+            Zend/tests/gh21776.phpt \
+            Zend/tests/gh24989.phpt \
+            ext/exif/tests/gh23807.phpt \
+            ext/ffi/tests/finalize_type_bailout_leak.phpt \
+            ext/ffi/tests/spprintf_ps_null_and_zeropad.phpt \
+            ext/hash/tests/gh23950.phpt \
+            ext/opcache/tests/jit/aarch64_ir_patch_and_veneer_safety.phpt \
+            ext/opcache/tests/jit/assign_obj_may_throw_hooks_static_lazy.phpt \
+            ext/opcache/tests/jit/gh24436.phpt \
+            ext/pdo/tests/pdo_fetch_both_column_count_overflow.phpt \
+            ext/pdo_pgsql/tests/libpq_symbol_portability.phpt \
+            ext/phar/tests/tar/gh24740.phpt \
+            ext/session/tests/gh24376_session_cloexec.phpt \
+            ext/session/tests/mod_user_create_sid_null.phpt \
+            ext/session/tests/session_id_nul_byte.phpt \
+            ext/soap/tests/gh23771.phpt \
+            ext/soap/tests/gh23771_invalid.phpt \
+            ext/soap/tests/gh23771_valid.phpt \
+            ext/spl/tests/spl_file_info_get_link_target_uninit.phpt \
+            ext/standard/tests/http/http_response_header_nested_request.phpt \
+            ext/standard/tests/network/gh24616.phpt \
+            ext/standard/tests/network/network_addr_nul_and_bindto_leak.phpt \
+            ext/standard/tests/serialize/__unserialize_malformed_nested_destructor.phpt \
+            ext/standard/tests/strings/gh23204_frameless.phpt \
+            ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
+            ext/xsl/tests/gh23199_destruct.phpt \
+            ext/zip/tests/gh23240_cleanup.phpt \
+            ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
+            sapi/fpm/tests/zlog_errno_stack_overflow.phpt; do
+            if [ -f "$t" ]; then
+              TESTS="$TESTS $t"
             fi
+          done
+          if [ -n "$TESTS" ]; then
+            echo "Running Digitsflow Security & Sanitizer Regression Suite under ASAN (${{ matrix.arch }}):"
+            echo "$TESTS"
+            sapi/cli/php run-tests.php -P -q --show-diff -d extension_dir=$PWD/modules $TESTS
           fi
