@@ -59,10 +59,7 @@ static const char *rcsid = "$OpenBSD: strlcpy.c,v 1.15 2016/10/16 17:37:39 dtuck
  * will be copied.  Always NUL terminates (unless siz == 0).
  * Returns strlen(src); if retval >= siz, truncation occurred.
  */
-PHPAPI size_t php_strlcpy(dst, src, siz)
-	char *dst;
-	const char *src;
-	size_t siz;
+PHPAPI size_t php_strlcpy(char *dst, const char *src, size_t siz)
 {
 	const char *s = src;
 	size_t n = siz;
