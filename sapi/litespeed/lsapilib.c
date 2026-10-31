@@ -648,9 +648,9 @@ static int allocateEnvList( struct LSAPI_key_value_pair ** pEnvList,
 
 static inline int isPipe( int fd )
 {
-    char        achPeer[128];
-    socklen_t   len = 128;
-    if ((getpeername(fd, (struct sockaddr *)achPeer, &len) != 0 )
+    struct sockaddr_storage achPeer;
+    socklen_t   len = sizeof(achPeer);
+    if ((getpeername(fd, (struct sockaddr *)&achPeer, &len) != 0 )
         && (errno == ENOTCONN || errno == ENOTSOCK))
         return 0;
     else
@@ -1428,6 +1428,8 @@ static int parseRequest( LSAPI_Request * pReq, int totalLen )
     }
 
     pReq->m_reqBodyLen = pReq->m_pHeader->m_reqBodyLen;
+    if ( pReq->m_reqBodyLen < -2 )
+        return -1;
     if ( pReq->m_reqBodyLen == -2 )
     {
         if (parseContentLenFromHeader(pReq) == -1)
@@ -1503,13 +1505,17 @@ static inline int notify_req_received( int fd )
 
 static inline int lsapi_notify_pid( int fd )
 {
-    char achBuf[16];
-    lsapi_buildPacketHeader( (struct lsapi_packet_header *)achBuf, LSAPI_STDERR_STREAM,
+    struct {
+        struct lsapi_packet_header hdr;
+        char tag[4];
+        int32_t pid;
+    } pkt;
+    lsapi_buildPacketHeader( &pkt.hdr, LSAPI_STDERR_STREAM,
                         8 + LSAPI_PACKET_HEADER_LEN );
-    memmove( &achBuf[8], "\0PID", 4 );
-    *((int *)&achBuf[12]) = getpid();
+    memcpy( pkt.tag, "\0PID", 4 );
+    pkt.pid = (int32_t)getpid();
 
-    if ( write( fd, achBuf, 16 ) < 16 )
+    if ( write( fd, &pkt, sizeof(pkt) ) < (ssize_t)sizeof(pkt) )
         return -1;
     return 0;
 }
@@ -1800,7 +1806,12 @@ int LSAPI_Finish_r( LSAPI_Request * pReq )
         {
             if ( pReq->m_reqState & LSAPI_ST_RESP_HEADER )
             {
-                LSAPI_FinalizeRespHeaders_r( pReq );
+                if ( LSAPI_FinalizeRespHeaders_r( pReq ) == -1 )
+                {
+                    lsapi_close_connection( pReq );
+                    LSAPI_Reset_r( pReq );
+                    return -1;
+                }
             }
             if ( pReq->m_pRespBufPos != pReq->m_pRespBuf )
             {
@@ -1834,7 +1845,11 @@ int LSAPI_End_Response_r(LSAPI_Request * pReq)
                 if ( pReq->m_pRespHeaderBufPos <= pReq->m_pRespHeaderBuf )
                     return 0;
 
-                LSAPI_FinalizeRespHeaders_r( pReq );
+                if ( LSAPI_FinalizeRespHeaders_r( pReq ) == -1 )
+                {
+                    lsapi_close_connection( pReq );
+                    return -1;
+                }
             }
             if ( pReq->m_pRespBufPos != pReq->m_pRespBuf )
             {
@@ -1950,13 +1965,15 @@ int LSAPI_ReqBodyGetLine_r( LSAPI_Request * pReq, char * pBuf, size_t bufLen, in
 {
     ssize_t len;
     ssize_t left;
-    char * pBufEnd = pBuf + bufLen - 1;
-    char * pBufCur = pBuf;
+    char * pBufEnd;
+    char * pBufCur;
     char * pCur;
     char * p;
     if (!pReq || pReq->m_fd == -1 || !pBuf || !getLF || bufLen == 0
-        || bufLen > (size_t)SSIZE_MAX)
+        || bufLen > (size_t)INT_MAX || bufLen > (size_t)SSIZE_MAX)
         return -1;
+    pBufEnd = pBuf + (bufLen - 1);
+    pBufCur = pBuf;
     *getLF = 0;
     while( (left = pBufEnd - pBufCur ) > 0 )
     {
@@ -2058,7 +2075,8 @@ ssize_t LSAPI_Write_r( LSAPI_Request * pReq, const char * pBuf, size_t len )
         return -1;
     if ( pReq->m_reqState & LSAPI_ST_RESP_HEADER )
     {
-        LSAPI_FinalizeRespHeaders_r( pReq );
+        if ( LSAPI_FinalizeRespHeaders_r( pReq ) == -1 )
+            return -1;
 /*
         if ( *pBuf == '\r' )
         {
@@ -2394,7 +2412,11 @@ int LSAPI_Flush_r( LSAPI_Request * pReq )
     }
     if ( pReq->m_reqState & LSAPI_ST_RESP_HEADER )
     {
-        LSAPI_FinalizeRespHeaders_r( pReq );
+        if ( LSAPI_FinalizeRespHeaders_r( pReq ) == -1 )
+        {
+            lsapi_close_connection( pReq );
+            return -1;
+        }
     }
     if ( pReq->m_pRespBufPos != pReq->m_pRespBuf )
     {
@@ -2476,7 +2498,7 @@ static char * GetHeaderVar( LSAPI_Request * pReq, const char * name )
 {
     int i;
     char * pValue;
-    for( i = 0; i < H_TRANSFER_ENCODING; ++i )
+    for( i = 0; i <= H_TRANSFER_ENCODING; ++i )
     {
         if ( pReq->m_pHeaderIndex->m_headerOff[i] )
         {
@@ -2511,7 +2533,7 @@ static char * GetHeaderVar( LSAPI_Request * pReq, const char * name )
             while(( pKey < pKeyEnd )&&( *p ))
             {
                 char ch = toupper((unsigned char)*pKey);
-                if ((ch != *p )||(( *p == '_' )&&( ch != '-')))
+                if ( *p == '_' ? ( ch != '-' && ch != '_' ) : ( ch != *p ) )
                     break;
                 ++p; ++pKey;
             }
@@ -2594,7 +2616,7 @@ int LSAPI_ForeachOrgHeader_r( LSAPI_Request * pReq,
     if ( !pReq->m_pHeaderIndex )
         return 0;
 
-    for( i = 0; i < H_TRANSFER_ENCODING; ++i )
+    for( i = 0; i <= H_TRANSFER_ENCODING; ++i )
     {
         if ( pReq->m_pHeaderIndex->m_headerOff[i] )
         {
@@ -2664,7 +2686,7 @@ int LSAPI_ForeachHeader_r( LSAPI_Request * pReq,
     int count = 0;
     if ( !pReq || !fn )
         return -1;
-    for( i = 0; i < H_TRANSFER_ENCODING; ++i )
+    for( i = 0; i <= H_TRANSFER_ENCODING; ++i )
     {
         if ( pReq->m_pHeaderIndex->m_headerOff[i] )
         {
@@ -2841,11 +2863,14 @@ int LSAPI_AppendRespHeader2_r( LSAPI_Request * pReq, const char * pHeaderName,
         return -1;
     len = (int)(nameLen + valLen + 1);
 
-    if ( pReq->m_pRespHeaderBufPos + len + 1 > pReq->m_pRespHeaderBufEnd )
+    if ( !pReq->m_pRespHeaderBuf
+         || (size_t)(pReq->m_pRespHeaderBufEnd - pReq->m_pRespHeaderBufPos) < (size_t)len + 1 )
     {
-        int newlen = pReq->m_pRespHeaderBufPos + len + 4096 - pReq->m_pRespHeaderBuf;
-        newlen -= newlen % 4096;
-        if ( allocateRespHeaderBuf( pReq, newlen ) == -1 )
+        size_t used = pReq->m_pRespHeaderBuf
+                      ? (size_t)(pReq->m_pRespHeaderBufPos - pReq->m_pRespHeaderBuf) : 0;
+        size_t needed = used + (size_t)len + 4096;
+        needed -= needed % 4096;
+        if ( needed > (size_t)INT_MAX || allocateRespHeaderBuf( pReq, (int)needed ) == -1 )
             return -1;
     }
     memmove( pReq->m_pRespHeaderBufPos, pHeaderName, nameLen );
@@ -2882,11 +2907,14 @@ int LSAPI_AppendRespHeader_r( LSAPI_Request * pReq, const char * pBuf, int len )
     if (len >= SHRT_MAX || memchr(pBuf, '\0', len)
         || memchr(pBuf, '\r', len) || memchr(pBuf, '\n', len))
         return -1;
-    if ( pReq->m_pRespHeaderBufPos + len + 1 > pReq->m_pRespHeaderBufEnd )
+    if ( !pReq->m_pRespHeaderBuf
+         || (size_t)(pReq->m_pRespHeaderBufEnd - pReq->m_pRespHeaderBufPos) < (size_t)len + 1 )
     {
-        int newlen = pReq->m_pRespHeaderBufPos + len + 4096 - pReq->m_pRespHeaderBuf;
-        newlen -= newlen % 4096;
-        if ( allocateRespHeaderBuf( pReq, newlen ) == -1 )
+        size_t used = pReq->m_pRespHeaderBuf
+                      ? (size_t)(pReq->m_pRespHeaderBufPos - pReq->m_pRespHeaderBuf) : 0;
+        size_t needed = used + (size_t)len + 4096;
+        needed -= needed % 4096;
+        if ( needed > (size_t)INT_MAX || allocateRespHeaderBuf( pReq, (int)needed ) == -1 )
             return -1;
     }
     memmove( pReq->m_pRespHeaderBufPos, pBuf, len );
@@ -3076,13 +3104,13 @@ int LSAPI_ParseSockAddr( const char * pBind, struct sockaddr * pAddr )
 
 int LSAPI_CreateListenSock( const char * pBind, int backlog )
 {
-    char serverAddr[128];
+    struct sockaddr_storage serverAddr;
     int ret;
     int fd = -1;
-    ret = LSAPI_ParseSockAddr( pBind, (struct sockaddr *)serverAddr );
+    ret = LSAPI_ParseSockAddr( pBind, (struct sockaddr *)&serverAddr );
     if ( !ret )
     {
-        fd = LSAPI_CreateListenSock2( (struct sockaddr *)serverAddr, backlog );
+        fd = LSAPI_CreateListenSock2( (struct sockaddr *)&serverAddr, backlog );
     }
     return fd;
 }
@@ -3163,7 +3191,7 @@ static int lsapi_accept( int fdListen )
     int         fd;
     int         nodelay = 1;
     socklen_t   len;
-    char        achPeer[128];
+    struct sockaddr_storage achPeer;
 
     len = sizeof( achPeer );
     fd = accept( fdListen, (struct sockaddr *)&achPeer, &len );
@@ -3310,14 +3338,22 @@ static void lsapi_sigchild( int signal )
 static int lsapi_init_children_status(void)
 {
     char * pBuf;
-    int size = 4096;
-    int max_children;
+    size_t size;
+    size_t max_children;
     if (g_prefork_server->m_pChildrenStatus)
         return 0;
-    max_children = g_prefork_server->m_iMaxChildren
-                        + g_prefork_server->m_iExtraChildren;
+    if (g_prefork_server->m_iMaxChildren <= 0)
+        g_prefork_server->m_iMaxChildren = 1;
+    else if (g_prefork_server->m_iMaxChildren > 10000)
+        g_prefork_server->m_iMaxChildren = 10000;
+    if (g_prefork_server->m_iExtraChildren < 0)
+        g_prefork_server->m_iExtraChildren = 0;
+    else if (g_prefork_server->m_iExtraChildren > 10000)
+        g_prefork_server->m_iExtraChildren = 10000;
+    max_children = (size_t)g_prefork_server->m_iMaxChildren
+                        + (size_t)g_prefork_server->m_iExtraChildren;
 
-    size = max_children * sizeof( lsapi_child_status ) * 2 + 3 * sizeof(int);
+    size = max_children * sizeof( lsapi_child_status ) * 2 + sizeof(size_t) + 3 * sizeof(int);
     size = (size + 4095) / 4096 * 4096;
     pBuf =( char*) mmap( NULL, size, PROT_READ | PROT_WRITE,
         MAP_ANON | MAP_SHARED, -1, 0 );
@@ -3330,10 +3366,10 @@ static int lsapi_init_children_status(void)
     g_prefork_server->m_pChildrenStatus = (lsapi_child_status *)pBuf;
     g_prefork_server->m_pChildrenStatusCur = (lsapi_child_status *)pBuf;
     g_prefork_server->m_pChildrenStatusEnd = (lsapi_child_status *)pBuf + max_children;
-    s_busy_workers = (int *)g_prefork_server->m_pChildrenStatusEnd;
+    s_avail_pages = (size_t *)g_prefork_server->m_pChildrenStatusEnd;
+    s_busy_workers = (int *)(s_avail_pages + 1);
     s_accepting_workers = s_busy_workers + 1;
     s_global_counter = s_accepting_workers + 1;
-    s_avail_pages = (size_t *)(s_global_counter + 1);
 
     setsid();
     return 0;
@@ -3560,6 +3596,8 @@ static int lsapi_prefork_server_accept( lsapi_prefork_server * pServer,
 //                  s_total_pages, *s_avail_pages, *s_avail_pages * 100 / s_total_pages);
 
 #endif
+        if (pServer->m_fd < 0 || pServer->m_fd >= FD_SETSIZE)
+            break;
         FD_ZERO( &readfds );
         FD_SET( pServer->m_fd, &readfds );
         timeout.tv_sec = 1;
@@ -3624,11 +3662,13 @@ static int lsapi_prefork_server_accept( lsapi_prefork_server * pServer,
 
             if ( !pid )
             {
+                int max_children = pServer->m_iMaxChildren;
                 setsid();
                 if (sigprocmask(SIG_SETMASK, &orig_mask, NULL) < 0)
                     perror( "sigprocmask( SIG_SETMASK ) to restore SIGMASK in child" );
                 if (s_fork_after_child)
                     (*s_fork_after_child)();
+                free(g_prefork_server);
                 g_prefork_server = NULL;
                 s_ppid = getppid();
                 s_pid = getpid();
@@ -3639,14 +3679,15 @@ static int lsapi_prefork_server_accept( lsapi_prefork_server * pServer,
                 if (pthread_atfork_func)
                     (*pthread_atfork_func)(NULL, NULL, set_skip_write);
 
-                __atomic_store_n(&s_worker_status->m_state,
-                                 LSAPI_STATE_CONNECTED, __ATOMIC_SEQ_CST);
+                if (s_worker_status)
+                    __atomic_store_n(&s_worker_status->m_state,
+                                     LSAPI_STATE_CONNECTED, __ATOMIC_SEQ_CST);
                 if (s_busy_workers)
                     __atomic_add_fetch(s_busy_workers, 1, __ATOMIC_SEQ_CST);
                 lsapi_set_nblock( pReq->m_fd, 0 );
                 //keep it open if busy_count is used.
                 if (!s_keep_listener && s_busy_workers
-                    && *s_busy_workers > (pServer->m_iMaxChildren >> 1))
+                    && *s_busy_workers > (max_children >> 1))
                     s_keep_listener = 1;
                 if ((s_uid == 0 || !s_keep_listener || !is_enough_free_mem())
                     && pReq->m_fdListen != -1 )
@@ -3719,10 +3760,12 @@ int LSAPI_Postfork_Child(LSAPI_Request * pReq)
 {
     int max_children = g_prefork_server->m_iMaxChildren;
     s_pid = getpid();
-    __atomic_store_n(&pReq->child_status->m_pid, s_pid, __ATOMIC_SEQ_CST);
+    if (pReq->child_status)
+        __atomic_store_n(&pReq->child_status->m_pid, s_pid, __ATOMIC_SEQ_CST);
     s_worker_status = pReq->child_status;
 
     setsid();
+    free(g_prefork_server);
     g_prefork_server = NULL;
     s_ppid = getppid();
     s_req_processed = 0;
@@ -3731,8 +3774,9 @@ int LSAPI_Postfork_Child(LSAPI_Request * pReq)
     if (pthread_atfork_func)
         (*pthread_atfork_func)(NULL, NULL, set_skip_write);
 
-    __atomic_store_n(&s_worker_status->m_state,
-                     LSAPI_STATE_CONNECTED, __ATOMIC_SEQ_CST);
+    if (s_worker_status)
+        __atomic_store_n(&s_worker_status->m_state,
+                         LSAPI_STATE_CONNECTED, __ATOMIC_SEQ_CST);
     if (s_busy_workers)
         __atomic_add_fetch(s_busy_workers, 1, __ATOMIC_SEQ_CST);
     lsapi_set_nblock( pReq->m_fd, 0 );
@@ -3853,6 +3897,8 @@ int LSAPI_Accept_Before_Fork(LSAPI_Request * pReq)
 //                  s_total_pages, *s_avail_pages, *s_avail_pages * 100 / s_total_pages);
 
 #endif
+        if (pServer->m_fd < 0 || pServer->m_fd >= FD_SETSIZE)
+            break;
         FD_ZERO(&readfds);
         FD_SET(pServer->m_fd, &readfds);
         timeout.tv_sec = 1;
@@ -3984,6 +4030,8 @@ int LSAPI_Prefork_Accept_r( LSAPI_Request * pReq )
             if (s_req_processed && s_worker_status
                 && s_worker_status->m_iKillSent)
                 return -1;
+            if ( fd < 0 || fd >= FD_SETSIZE )
+                return -1;
             FD_ZERO( &readfds );
             FD_SET( fd, &readfds );
             timeout.tv_sec = 1;
@@ -4019,9 +4067,13 @@ int LSAPI_Prefork_Accept_r( LSAPI_Request * pReq )
                         {
                             int wait_time = 10;
                             if (s_busy_workers)
-                                wait_time += *s_busy_workers * 10;
+                                wait_time += __atomic_load_n(s_busy_workers, __ATOMIC_RELAXED) * 10;
                             if (s_accepting_workers)
-                                wait_time >>= (*s_accepting_workers);
+                            {
+                                int accepting = __atomic_load_n(s_accepting_workers, __ATOMIC_RELAXED);
+                                if (accepting > 0)
+                                    wait_time = (accepting >= 20) ? 0 : (wait_time >> accepting);
+                            }
                             if (wait_secs >= wait_time)
                                 return -1;
                         }
@@ -4113,15 +4165,15 @@ void LSAPI_Set_Max_Idle( int secs )
 
 void LSAPI_Set_Max_Children( int maxChildren )
 {
-    if ( g_prefork_server )
-        g_prefork_server->m_iMaxChildren = maxChildren;
+    if ( g_prefork_server && maxChildren > 0 )
+        g_prefork_server->m_iMaxChildren = (maxChildren < 10000) ? maxChildren : 10000;
 }
 
 
 void LSAPI_Set_Extra_Children( int extraChildren )
 {
     if (( g_prefork_server )&&( extraChildren >= 0 ))
-        g_prefork_server->m_iExtraChildren = extraChildren;
+        g_prefork_server->m_iExtraChildren = (extraChildren < 10000) ? extraChildren : 10000;
 }
 
 
@@ -4408,16 +4460,17 @@ int LSAPI_Init_Env_Parameters( fn_select_t fp )
     if ( p )
     {
         avoidFork = atoi( p );
-        if (avoidFork)
+        if (avoidFork > 0)
         {
+            unsigned long long avoidBytes = (unsigned long long)avoidFork;
             s_keep_listener = 2;
             ch = *(p + strlen(p) - 1);
-            if (  ch == 'G' || ch == 'g' )
-                avoidFork *= 1024 * 1024 * 1024;
-            else if (  ch == 'M' || ch == 'm' )
-                avoidFork *= 1024 * 1024;
-            if (avoidFork >= 1024 * 10240)
-                s_min_avail_pages = avoidFork / 4096;
+            if ( (ch == 'G' || ch == 'g') && avoidBytes <= ULLONG_MAX / (1024ULL * 1024ULL * 1024ULL) )
+                avoidBytes *= 1024ULL * 1024ULL * 1024ULL;
+            else if ( (ch == 'M' || ch == 'm') && avoidBytes <= ULLONG_MAX / (1024ULL * 1024ULL) )
+                avoidBytes *= 1024ULL * 1024ULL;
+            if (avoidBytes >= 1024ULL * 10240ULL)
+                s_min_avail_pages = (size_t)(avoidBytes / 4096ULL);
         }
     }
 
@@ -4781,5 +4834,5 @@ int LSAPI_Set_Restored_Parent_Pid(int pid)
 
 int LSAPI_Inc_Req_Processed(int cnt)
 {
-    return __atomic_add_fetch(s_global_counter, cnt, __ATOMIC_SEQ_CST);
+    return s_global_counter ? __atomic_add_fetch(s_global_counter, cnt, __ATOMIC_SEQ_CST) : 0;
 }

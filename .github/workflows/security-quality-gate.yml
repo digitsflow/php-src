@@ -67,6 +67,7 @@ jobs:
             --disable-all \
             --enable-cli \
             --enable-fpm \
+            --enable-litespeed \
             --enable-opcache \
             --enable-phar \
             --enable-session \
@@ -110,6 +111,8 @@ jobs:
             ext/ffi/tests/finalize_type_bailout_leak.phpt \
             ext/ffi/tests/spprintf_ps_null_and_zeropad.phpt \
             ext/hash/tests/gh23950.phpt \
+            ext/json/tests/json_encode_invalid_key_aborts.phpt \
+            ext/json/tests/json_encode_nan_abort.phpt \
             ext/opcache/tests/jit/aarch64_ir_patch_and_veneer_safety.phpt \
             ext/opcache/tests/jit/assign_obj_may_throw_hooks_static_lazy.phpt \
             ext/opcache/tests/jit/gh24436.phpt \
@@ -132,7 +135,8 @@ jobs:
             ext/xsl/tests/gh23199_destruct.phpt \
             ext/zip/tests/gh23240_cleanup.phpt \
             ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
-            sapi/fpm/tests/zlog_errno_stack_overflow.phpt; do
+            sapi/fpm/tests/zlog_errno_stack_overflow.phpt \
+            sapi/litespeed/tests/lsapi_security_hardening.phpt; do
             if [ -f "$t" ]; then
               TESTS="$TESTS $t"
             fi

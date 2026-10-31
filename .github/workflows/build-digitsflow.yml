@@ -80,6 +80,8 @@ jobs:
             ext/standard/tests/network/gh24616.phpt \
             ext/standard/tests/network/network_addr_nul_and_bindto_leak.phpt \
             sapi/fpm/tests/zlog_errno_stack_overflow.phpt \
+            ext/json/tests/json_encode_invalid_key_aborts.phpt \
+            ext/json/tests/json_encode_nan_abort.phpt \
             ext/pdo_pgsql/tests/libpq_symbol_portability.phpt; do
             if [ -f "$t" ]; then
               TESTS="$TESTS $t"

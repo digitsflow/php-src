@@ -695,13 +695,15 @@ static void init_request_info( void )
 {
     char * pContentType = LSAPI_GetHeader( H_CONTENT_TYPE );
     char * pAuth;
+    const char * pScriptFile = LSAPI_GetScriptFileName();
+    off_t req_body_len = LSAPI_GetReqBodyLen();
 
     SG(request_info).content_type = pContentType ? pContentType : "";
     SG(request_info).request_method = LSAPI_GetRequestMethod();
     SG(request_info).query_string = LSAPI_GetQueryString();
     SG(request_info).request_uri = LSAPI_GetScriptName();
-    SG(request_info).content_length = LSAPI_GetReqBodyLen();
-    SG(request_info).path_translated = estrdup( LSAPI_GetScriptFileName());
+    SG(request_info).content_length = (req_body_len > 0) ? req_body_len : 0;
+    SG(request_info).path_translated = estrdup( pScriptFile ? pScriptFile : "" );
 
     /* It is not reset by zend engine, set it to 200. */
     SG(sapi_headers).http_response_code = 200;
@@ -720,7 +722,7 @@ static int lsapi_execute_script(void)
 	file_handle.primary_script = true;
 
     script_path = SG(request_info).path_translated;
-    if (argv0 && argv0_suffix_capacity > 1) {
+    if (script_path && argv0 && argv0_suffix_capacity > 1) {
         title_len = (size_t)max_cmd_script_path_len;
         if (title_len >= argv0_suffix_capacity)
             title_len = argv0_suffix_capacity - 1;
@@ -1531,11 +1533,22 @@ void start_children( int children )
     exit( 0 );
 }
 
+static void lsapi_after_fork_child(void)
+{
+    php_child_init();
+}
+
 void setArgv0( int argc, char * argv[] )
 {
     char * p;
     char * area_end;
     int i;
+    if ( argc <= 0 || !argv || !argv[0] )
+    {
+        argv0 = NULL;
+        argv0_suffix_capacity = 0;
+        return;
+    }
     area_end = argv[0] + strlen( argv[0] );
     argv0 = area_end;
     p = argv0;
@@ -1613,7 +1626,7 @@ int main( int argc, char * argv[] )
     SG(request_info).path_translated = NULL;
 #endif
 
-    lsapi_sapi_module.executable_location = argv[0];
+    lsapi_sapi_module.executable_location = (argc > 0 && argv) ? argv[0] : NULL;
 
     /* Initialize from environment variables before processing command-line
      * options: the latter override the former.
@@ -1684,6 +1697,7 @@ int main( int argc, char * argv[] )
         free(php_bind);
         return FAILURE;
     }
+    LSAPI_Set_Fork_Hooks( NULL, NULL, lsapi_after_fork_child );
     lsapi_mode = 1;
 
     slow_script_msec = LSAPI_Get_Slow_Req_Msecs();

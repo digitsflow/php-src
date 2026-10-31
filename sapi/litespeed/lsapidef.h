@@ -93,7 +93,9 @@ enum
 #define LSAPI_ENDIAN_BIG            1
 #define LSAPI_ENDIAN_BIT            1
 
-#if defined(__i386__)||defined( __x86_64 )||defined( __x86_64__ )
+#if defined(__i386__) || defined(__x86_64) || defined(__x86_64__) \
+    || defined(__aarch64__) || defined(_M_ARM64) \
+    || (defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__))
 #define LSAPI_ENDIAN                LSAPI_ENDIAN_LITTLE
 #else
 #define LSAPI_ENDIAN                LSAPI_ENDIAN_BIG

@@ -102,6 +102,8 @@ jobs:
             ext/standard/tests/strings/gh23204_frameless.phpt \
             ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
             ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
+            ext/json/tests/json_encode_invalid_key_aborts.phpt \
+            ext/json/tests/json_encode_nan_abort.phpt \
             ext/opcache/tests/jit/assign_obj_may_throw_hooks_static_lazy.phpt \
             ext/opcache/tests/jit/gh24436.phpt \
             ext/standard/tests/network/network_addr_nul_and_bindto_leak.phpt \
@@ -191,6 +193,8 @@ jobs:
             ext/standard/tests/strings/gh23204_frameless.phpt \
             ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
             ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
+            ext/json/tests/json_encode_invalid_key_aborts.phpt \
+            ext/json/tests/json_encode_nan_abort.phpt \
             ext/session/tests/gh24376_session_cloexec.phpt \
             ext/opcache/tests/jit/assign_obj_may_throw_hooks_static_lazy.phpt \
             ext/opcache/tests/jit/gh24436.phpt \
@@ -256,6 +260,8 @@ jobs:
             ext/standard/tests/strings/gh23204_frameless.phpt \
             ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
             ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
+            ext/json/tests/json_encode_invalid_key_aborts.phpt \
+            ext/json/tests/json_encode_nan_abort.phpt \
             ext/session/tests/gh24376_session_cloexec.phpt; do
             if [ -f "$t" ]; then
               TESTS="$TESTS $t"
@@ -322,6 +328,8 @@ jobs:
             ext/standard/tests/strings/gh23204_frameless.phpt \
             ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
             ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
+            ext/json/tests/json_encode_invalid_key_aborts.phpt \
+            ext/json/tests/json_encode_nan_abort.phpt \
             ext/session/tests/gh24376_session_cloexec.phpt; do
             if [ -f "$t" ]; then
               TESTS="$TESTS $t"
@@ -367,6 +375,8 @@ jobs:
             ext/standard/tests/strings/gh23204_frameless.phpt \
             ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
             ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
+            ext/json/tests/json_encode_invalid_key_aborts.phpt \
+            ext/json/tests/json_encode_nan_abort.phpt \
             ext/session/tests/gh24376_session_cloexec.phpt; do
             if [ -f "$t" ]; then
               echo "Verified $t"

@@ -179,7 +179,7 @@ static zend_result php_json_encode_array(smart_str *buf, zval *val, int options,
 			php_json_pretty_print_char(buf, options, ' ');
 
 			if (php_json_encode_zval(buf, prop, options, encoder) == FAILURE &&
-					!(options & PHP_JSON_PARTIAL_OUTPUT_ON_ERROR)) {
+					(ZEND_HAS_OOM() || !(options & PHP_JSON_PARTIAL_OUTPUT_ON_ERROR))) {
 				PHP_JSON_HASH_UNPROTECT_RECURSION(obj);
 				return FAILURE;
 			}
@@ -311,7 +311,7 @@ static zend_result php_json_encode_array(smart_str *buf, zval *val, int options,
 			}
 
 			if (php_json_encode_zval(buf, data, options, encoder) == FAILURE &&
-					!(options & PHP_JSON_PARTIAL_OUTPUT_ON_ERROR)) {
+					(ZEND_HAS_OOM() || !(options & PHP_JSON_PARTIAL_OUTPUT_ON_ERROR))) {
 				PHP_JSON_HASH_UNPROTECT_RECURSION(recursion_rc);
 				zend_release_properties(prop_ht);
 				zval_ptr_dtor(&tmp);
@@ -672,7 +672,10 @@ again:
 				php_json_encode_double(buf, Z_DVAL_P(val), options);
 			} else {
 				encoder->error_code = PHP_JSON_ERROR_INF_OR_NAN;
-				smart_str_appendc(buf, '0');
+				if (options & PHP_JSON_PARTIAL_OUTPUT_ON_ERROR) {
+					smart_str_appendc(buf, '0');
+				}
+				return FAILURE;
 			}
 			break;
 
