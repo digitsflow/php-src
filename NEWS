@@ -40,6 +40,10 @@ PHP                                                                        NEWS
     autoloads its cached child during linking). (David Carlier)
   . Fixed AST printing dropping final on class constants and properties, and
     abstract on properties. (Jorg Sowa)
+  . Fixed AST export of readonly anonymous classes dropping the readonly
+    modifier. (Jorg Sowa)
+  . Fixed memory leak of a duplicate named argument in new in initializer.
+    (Jorg Sowa)
 
 - CLI:
   . Fixed bug GH-24697 (PHP_HTTP_PARSER_STRICT build option doesn't work).
@@ -202,6 +206,8 @@ PHP                                                                        NEWS
     (Pavel Gushcha)
   . Fixed potential infinite recursion/hang (HYBRID/TAILCALL respectively)
     when zend_interrupt_function resets EG(vm_interrupt).  (Levi Morrison)
+  . Fixed preloaded functions not JIT-compiled again after OPcache restart.
+    (Jorg Sowa)
 
 - OpenSSL:
   . Fixed bug GH-24784 (openssl_pkcs7_read() and openssl_cms_read() overwrite

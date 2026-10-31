@@ -942,6 +942,7 @@ ZEND_API zend_result ZEND_FASTCALL zend_ast_evaluate_inner(
 							zend_throw_error(NULL,
 								"Named parameter $%s overwrites previous argument",
 								ZSTR_VAL(name));
+							zval_ptr_dtor(&arg);
 							zend_array_destroy(args);
 							zval_ptr_dtor(result);
 							return FAILURE;
@@ -2319,6 +2320,9 @@ simple_list:
 				zend_ast_decl *decl = (zend_ast_decl *) ast->child[0];
 				if (decl->child[3]) {
 					zend_ast_export_attributes(str, decl->child[3], indent, 0);
+				}
+				if (decl->flags & ZEND_ACC_READONLY_CLASS) {
+					smart_str_appends(str, "readonly ");
 				}
 				smart_str_appends(str, "class");
 				if (!zend_ast_is_list(ast->child[1])
