@@ -276,7 +276,7 @@ jobs:
           - arch: X64
           - arch: ARM64
     name: MACOS_${{ matrix.arch }}_DEBUG_NTS
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: git checkout
         uses: actions/checkout@v4

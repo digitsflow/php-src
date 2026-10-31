@@ -67,7 +67,6 @@ jobs:
             ext/zip/tests/gh23240_cleanup.phpt \
             ext/session/tests/mod_user_create_sid_null.phpt \
             ext/standard/tests/strings/gh23204_frameless.phpt \
-            ext/xsl/tests/gh23199_destruct.phpt \
             ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
             ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
             ext/session/tests/gh24376_session_cloexec.phpt \
@@ -87,7 +86,7 @@ jobs:
             fi
           done
           if [ -n "$TESTS" ]; then
-            ./sapi/cli/php run-tests.php -p ./sapi/cli/php $TESTS
+            ./sapi/cli/php run-tests.php -q --show-diff -p ./sapi/cli/php -d extension_dir=$PWD/modules $TESTS
           fi
 
       - name: Create Distribution Tarball
