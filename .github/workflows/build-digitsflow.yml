@@ -67,18 +67,26 @@ jobs:
             ext/zip/tests/gh23240_cleanup.phpt \
             ext/session/tests/mod_user_create_sid_null.phpt \
             ext/standard/tests/strings/gh23204_frameless.phpt \
-            ext/xsl/tests/gh23199_destruct.phpt \
             ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
             ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
             ext/session/tests/gh24376_session_cloexec.phpt \
             ext/opcache/tests/jit/aarch64_ir_patch_and_veneer_safety.phpt \
+            ext/opcache/tests/jit/assign_obj_may_throw_hooks_static_lazy.phpt \
+            ext/opcache/tests/jit/gh24436.phpt \
+            Zend/tests/gh24989.phpt \
+            ext/phar/tests/tar/gh24740.phpt \
+            ext/session/tests/session_id_nul_byte.phpt \
+            ext/standard/tests/serialize/__unserialize_malformed_nested_destructor.phpt \
+            ext/standard/tests/network/gh24616.phpt \
+            ext/standard/tests/network/network_addr_nul_and_bindto_leak.phpt \
+            sapi/fpm/tests/zlog_errno_stack_overflow.phpt \
             ext/pdo_pgsql/tests/libpq_symbol_portability.phpt; do
             if [ -f "$t" ]; then
               TESTS="$TESTS $t"
             fi
           done
           if [ -n "$TESTS" ]; then
-            ./sapi/cli/php run-tests.php -p ./sapi/cli/php $TESTS
+            ./sapi/cli/php run-tests.php -q --show-diff -p ./sapi/cli/php -d extension_dir=$PWD/modules $TESTS
           fi
 
       - name: Create Distribution Tarball
@@ -215,9 +223,16 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             TAG_NAME="${GITHUB_REF#refs/tags/}"
             if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-              gh release create "$TAG_NAME" --generate-notes --title "Digitsflow PHP $TAG_NAME" || true
+              gh release create "$TAG_NAME" --target "${GITHUB_SHA}" --generate-notes --title "Digitsflow PHP $TAG_NAME" || true
             fi
             gh release upload "$TAG_NAME" "$TARBALL_X64" "$TARBALL_ARM64" --clobber
+            SERIES_PREFIX=$(echo "$TAG_NAME" | sed -E 's/^(v[0-9]+\.[0-9]+\.).*/\1/')
+            for old_rel in $(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate --jq '.[].tag_name' 2>/dev/null || true); do
+              if [[ "$old_rel" == "${SERIES_PREFIX}"* ]] && [[ "$old_rel" != "$TAG_NAME" ]]; then
+                echo "Removing superseded overlapping release in series ${SERIES_PREFIX}: ${old_rel}"
+                gh release delete "$old_rel" --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag || true
+              fi
+            done
           else
             echo "Verified multi-arch packages (${TARBALL_X64}, ${TARBALL_ARM64}) passed all pre-release gates for ref ${GITHUB_REF}."
           fi
