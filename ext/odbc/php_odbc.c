@@ -950,9 +950,21 @@ PHP_FUNCTION(odbc_prepare)
 													&result->param_info[i].scale, &result->param_info[i].nullable);
 		if (rc == SQL_ERROR) {
 			odbc_sql_error(result->conn_ptr, result->stmt, "SQLDescribeParameter");
-			SQLFreeStmt(result->stmt, SQL_RESET_PARAMS);
+			if (result->values) {
+				int j;
+				for (j = 0; j < result->numcols; j++) {
+					if (result->values[j].value) {
+						efree(result->values[j].value);
+					}
+				}
+				efree(result->values);
+			}
+			if (result->stmt) {
+				SQLFreeStmt(result->stmt, SQL_DROP);
+			}
 			efree(result->param_info);
 			efree(result);
+			zval_ptr_dtor(pv_conn);
 			RETURN_FALSE;
 		}
 	}

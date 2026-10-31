@@ -595,7 +595,8 @@ class Tester
         string $uri = null,
         string $scriptFilename = null,
         string $scriptName = null,
-        ?string $stdin = null
+        ?string $stdin = null,
+        ?string $method = null
     ): array {
         if (is_null($scriptFilename)) {
             $scriptFilename = $this->makeSourceFile();
@@ -610,7 +611,7 @@ class Tester
         $params = array_merge(
             [
                 'GATEWAY_INTERFACE' => 'FastCGI/1.0',
-                'REQUEST_METHOD'    => is_null($stdin) ? 'GET' : 'POST',
+                'REQUEST_METHOD'    => $method ?? (is_null($stdin) ? 'GET' : 'POST'),
                 'SCRIPT_FILENAME'   => $scriptFilename === '' ? null : $scriptFilename,
                 'SCRIPT_NAME'       => $scriptName,
                 'QUERY_STRING'      => $query,
@@ -730,6 +731,8 @@ class Tester
         string|array $stdin = null,
         bool $expectError = false,
         int $readLimit = -1,
+        array $params = null,
+        ?string $method = null,
     ): Response {
         if ($this->hasError()) {
             return new Response(null, true);
@@ -739,7 +742,7 @@ class Tester
             $stdin = $this->parseStdin($stdin, $headers);
         }
 
-        $params = $this->getRequestParams($query, $headers, $uri, $scriptFilename, $scriptName, $stdin);
+        $params = $params ?? $this->getRequestParams($query, $headers, $uri, $scriptFilename, $scriptName, $stdin, $method);
         $this->trace('Request params', $params);
 
         try {
@@ -954,6 +957,9 @@ class Tester
     {
         if (is_null($pid)) {
             $pid = $this->getPid();
+            if ($pid === 0) {
+                return '';
+            }
         }
         $cmd = "kill -$signal $pid";
         $this->trace('Sending signal using command', $cmd, true);

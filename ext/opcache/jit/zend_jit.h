@@ -154,6 +154,7 @@ ZEND_EXT_API void zend_jit_activate(void);
 ZEND_EXT_API void zend_jit_deactivate(void);
 ZEND_EXT_API void zend_jit_status(zval *ret);
 ZEND_EXT_API void zend_jit_restart(void);
+ZEND_EXT_API void zend_jit_save_restart_point(void);
 
 typedef struct _zend_lifetime_interval zend_lifetime_interval;
 typedef struct _zend_life_range zend_life_range;
