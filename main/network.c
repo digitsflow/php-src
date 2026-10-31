@@ -637,6 +637,10 @@ PHPAPI zend_result php_network_parse_network_address_with_port(const char *addr,
 	memset(in4, 0, sizeof(struct sockaddr_in));
 #endif
 
+	if (addrlen == 0 || memchr(addr, '\0', addrlen) != NULL) {
+		return FAILURE;
+	}
+
 	if (*addr == '[') {
 		colon = memchr(addr + 1, ']', addrlen-1);
 		if (!colon || colon[1] != ':') {

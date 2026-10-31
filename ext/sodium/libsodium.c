@@ -177,6 +177,34 @@ static zend_object *sodium_crypto_xof_turboshake256_state_clone(zend_object *old
 	return new_obj;
 }
 
+static void sodium_crypto_xof_shake128_state_free_obj(zend_object *object)
+{
+	php_sodium_crypto_xof_shake128_state *state = php_sodium_crypto_xof_shake128_state_from_obj(object);
+	sodium_memzero(&state->state, sizeof(state->state));
+	zend_object_std_dtor(&state->std);
+}
+
+static void sodium_crypto_xof_shake256_state_free_obj(zend_object *object)
+{
+	php_sodium_crypto_xof_shake256_state *state = php_sodium_crypto_xof_shake256_state_from_obj(object);
+	sodium_memzero(&state->state, sizeof(state->state));
+	zend_object_std_dtor(&state->std);
+}
+
+static void sodium_crypto_xof_turboshake128_state_free_obj(zend_object *object)
+{
+	php_sodium_crypto_xof_turboshake128_state *state = php_sodium_crypto_xof_turboshake128_state_from_obj(object);
+	sodium_memzero(&state->state, sizeof(state->state));
+	zend_object_std_dtor(&state->std);
+}
+
+static void sodium_crypto_xof_turboshake256_state_free_obj(zend_object *object)
+{
+	php_sodium_crypto_xof_turboshake256_state *state = php_sodium_crypto_xof_turboshake256_state_from_obj(object);
+	sodium_memzero(&state->state, sizeof(state->state));
+	zend_object_std_dtor(&state->std);
+}
+
 #endif
 
 #if (defined(__amd64) || defined(__amd64__) || defined(__x86_64__) || defined(__i386__) || \
@@ -324,6 +352,7 @@ PHP_MINIT_FUNCTION(sodium)
 	sodium_crypto_xof_shake128_state_ce->default_object_handlers = &sodium_crypto_xof_shake128_state_object_handlers;
 	memcpy(&sodium_crypto_xof_shake128_state_object_handlers, zend_get_std_object_handlers(), sizeof(zend_object_handlers));
 	sodium_crypto_xof_shake128_state_object_handlers.offset = offsetof(php_sodium_crypto_xof_shake128_state, std);
+	sodium_crypto_xof_shake128_state_object_handlers.free_obj = sodium_crypto_xof_shake128_state_free_obj;
 	sodium_crypto_xof_shake128_state_object_handlers.clone_obj = sodium_crypto_xof_shake128_state_clone;
 	sodium_crypto_xof_shake128_state_object_handlers.get_constructor = sodium_crypto_xof_shake128_state_get_constructor;
 
@@ -332,6 +361,7 @@ PHP_MINIT_FUNCTION(sodium)
 	sodium_crypto_xof_shake256_state_ce->default_object_handlers = &sodium_crypto_xof_shake256_state_object_handlers;
 	memcpy(&sodium_crypto_xof_shake256_state_object_handlers, zend_get_std_object_handlers(), sizeof(zend_object_handlers));
 	sodium_crypto_xof_shake256_state_object_handlers.offset = offsetof(php_sodium_crypto_xof_shake256_state, std);
+	sodium_crypto_xof_shake256_state_object_handlers.free_obj = sodium_crypto_xof_shake256_state_free_obj;
 	sodium_crypto_xof_shake256_state_object_handlers.clone_obj = sodium_crypto_xof_shake256_state_clone;
 	sodium_crypto_xof_shake256_state_object_handlers.get_constructor = sodium_crypto_xof_shake256_state_get_constructor;
 
@@ -340,6 +370,7 @@ PHP_MINIT_FUNCTION(sodium)
 	sodium_crypto_xof_turboshake128_state_ce->default_object_handlers = &sodium_crypto_xof_turboshake128_state_object_handlers;
 	memcpy(&sodium_crypto_xof_turboshake128_state_object_handlers, zend_get_std_object_handlers(), sizeof(zend_object_handlers));
 	sodium_crypto_xof_turboshake128_state_object_handlers.offset = offsetof(php_sodium_crypto_xof_turboshake128_state, std);
+	sodium_crypto_xof_turboshake128_state_object_handlers.free_obj = sodium_crypto_xof_turboshake128_state_free_obj;
 	sodium_crypto_xof_turboshake128_state_object_handlers.clone_obj = sodium_crypto_xof_turboshake128_state_clone;
 	sodium_crypto_xof_turboshake128_state_object_handlers.get_constructor = sodium_crypto_xof_turboshake128_state_get_constructor;
 
@@ -348,6 +379,7 @@ PHP_MINIT_FUNCTION(sodium)
 	sodium_crypto_xof_turboshake256_state_ce->default_object_handlers = &sodium_crypto_xof_turboshake256_state_object_handlers;
 	memcpy(&sodium_crypto_xof_turboshake256_state_object_handlers, zend_get_std_object_handlers(), sizeof(zend_object_handlers));
 	sodium_crypto_xof_turboshake256_state_object_handlers.offset = offsetof(php_sodium_crypto_xof_turboshake256_state, std);
+	sodium_crypto_xof_turboshake256_state_object_handlers.free_obj = sodium_crypto_xof_turboshake256_state_free_obj;
 	sodium_crypto_xof_turboshake256_state_object_handlers.clone_obj = sodium_crypto_xof_turboshake256_state_clone;
 	sodium_crypto_xof_turboshake256_state_object_handlers.get_constructor = sodium_crypto_xof_turboshake256_state_get_constructor;
 #endif

@@ -753,7 +753,7 @@ ZEND_API zval *zend_std_read_property(zend_object *zobj, zend_string *name, int 
 	bool release_zobj = false;
 
 #if DEBUG_OBJECT_HANDLERS
-	fprintf(stderr, "Read object #%d property: %pS\n", zobj->handle, name);
+	fprintf(stderr, "Read object #%d property: %.*s\n", zobj->handle, (int)ZSTR_LEN(name), ZSTR_VAL(name));
 #endif
 
 	/* make zend_get_property_info silent if we have getter - we may want to use it */
@@ -1469,7 +1469,7 @@ ZEND_API zval *zend_std_get_property_ptr_ptr(zend_object *zobj, zend_string *nam
 	ZEND_ASSERT(type != BP_VAR_R && type != BP_VAR_IS);
 
 #if DEBUG_OBJECT_HANDLERS
-	fprintf(stderr, "Ptr object #%d property: %pS\n", zobj->handle, name);
+	fprintf(stderr, "Ptr object #%d property: %.*s\n", zobj->handle, (int)ZSTR_LEN(name), ZSTR_VAL(name));
 #endif
 
 	property_offset = zend_get_property_offset(zobj->ce, name, (zobj->ce->__get != NULL), cache_slot, &prop_info);

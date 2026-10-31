@@ -648,7 +648,9 @@ static inline char *parse_ip_address_ex(const char *str, size_t str_len, int *po
 	char *host = NULL;
 
 	if (memchr(str, '\0', str_len)) {
-		*err = ZSTR_INIT_LITERAL("The hostname must not contain null bytes", 0);
+		if (get_err && err) {
+			*err = ZSTR_INIT_LITERAL("The hostname must not contain null bytes", 0);
+		}
 		return NULL;
 	}
 
@@ -953,7 +955,7 @@ static inline int php_tcp_sockop_connect(php_stream *stream, php_netstream_data_
 			efree(host);
 			return -1;
 		}
-		bindto = parse_ip_address_ex(Z_STRVAL_P(tmpzval), Z_STRLEN_P(tmpzval), &bindport, xparam->want_errortext, &xparam->outputs.error_text);
+		bindto = parse_ip_address_ex(Z_STRVAL_P(tmpzval), Z_STRLEN_P(tmpzval), &bindport, 0, NULL);
 	}
 
 #ifdef SO_BROADCAST

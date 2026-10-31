@@ -4938,6 +4938,91 @@ ZEND_API zend_result zend_ssa_inference(zend_arena **arena, const zend_op_array 
 }
 /* }}} */
 
+static bool ssa_var_is_non_lazy_new_object(
+	const zend_op_array *op_array, const zend_ssa *ssa, int start_var, const zend_class_entry *ce)
+{
+	if (!ssa || !ssa->vars || !ssa->ops || start_var < 0) {
+		return false;
+	}
+	if (ssa->vars[start_var].escape_state == ESCAPE_STATE_NO_ESCAPE) {
+		return true;
+	}
+
+	int seen[8];
+	int count = 0;
+	int idx = 0;
+	seen[count++] = start_var;
+
+	while (idx < count) {
+		int v = seen[idx++];
+		if (ssa->vars[v].escape_state == ESCAPE_STATE_NO_ESCAPE) {
+			continue;
+		}
+
+		int next_vars[8];
+		int next_count = 0;
+
+		if (ssa->vars[v].definition >= 0) {
+			int def = ssa->vars[v].definition;
+			const zend_op *op = &op_array->opcodes[def];
+			const zend_ssa_op *sop = &ssa->ops[def];
+
+			if (op->opcode == ZEND_NEW && sop->result_def == v && !ce->constructor) {
+				continue;
+			} else if (op->opcode == ZEND_QM_ASSIGN && sop->result_def == v && sop->op1_use >= 0) {
+				next_vars[next_count++] = sop->op1_use;
+			} else if (op->opcode == ZEND_ASSIGN
+			 && (sop->op1_def == v || sop->result_def == v) && sop->op2_use >= 0) {
+				next_vars[next_count++] = sop->op2_use;
+			} else if (op->opcode != ZEND_ASSIGN && sop->op1_def == v && sop->op1_use >= 0) {
+				next_vars[next_count++] = sop->op1_use;
+			} else {
+				return false;
+			}
+		} else if (ssa->vars[v].definition_phi) {
+			const zend_ssa_phi *phi = ssa->vars[v].definition_phi;
+			if (phi->pi >= 0) {
+				if (phi->sources[0] < 0) {
+					return false;
+				}
+				next_vars[next_count++] = phi->sources[0];
+			} else {
+				uint32_t preds = ssa->cfg.blocks[phi->block].predecessors_count;
+				if (preds == 0 || preds > 8) {
+					return false;
+				}
+				for (uint32_t p = 0; p < preds; p++) {
+					if (phi->sources[p] < 0) {
+						return false;
+					}
+					next_vars[next_count++] = phi->sources[p];
+				}
+			}
+		} else {
+			return false;
+		}
+
+		for (int n = 0; n < next_count; n++) {
+			int cand = next_vars[n];
+			bool already = false;
+			for (int s = 0; s < count; s++) {
+				if (seen[s] == cand) {
+					already = true;
+					break;
+				}
+			}
+			if (!already) {
+				if (count >= 8) {
+					return false;
+				}
+				seen[count++] = cand;
+			}
+		}
+	}
+
+	return true;
+}
+
 ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op, const zend_op_array *op_array, const zend_ssa *ssa, uint32_t t1, uint32_t t2)
 {
 	if (opline->op1_type == IS_CV) {
@@ -5230,7 +5315,7 @@ ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op
 					return 1;
 				}
 			}
-			if (ssa_op->op1_use) {
+			if (ssa_op && ssa && ssa->var_info && ssa_op->op1_use >= 0) {
 				const zend_ssa_var_info *var_info = ssa->var_info + ssa_op->op1_use;
 				const zend_class_entry *ce = var_info->ce;
 
@@ -5254,18 +5339,25 @@ ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op
 					return 1;
 				}
 
+				if ((ce->type == ZEND_USER_CLASS || ce == zend_standard_class_def)
+				 && !ssa_var_is_non_lazy_new_object(op_array, ssa, ssa_op->op1_use, ce)) {
+					return 1;
+				}
+
 				const zend_property_info *prop_info =
 					zend_hash_find_ptr(&ce->properties_info, prop_name);
 				if (prop_info) {
+					if ((prop_info->flags & (ZEND_ACC_STATIC|ZEND_ACC_READONLY|ZEND_ACC_PPP_SET_MASK))
+					 || prop_info->hooks) {
+						return 1;
+					}
 					if (ZEND_TYPE_IS_SET(prop_info->type)) {
 						uint32_t type_mask = ZEND_TYPE_PURE_MASK(prop_info->type);
 
 						/* The assignment can't fail if the property only accepts a single scalar type
 						 * and the value already has this type: the old value has no destructor.
 						 * If the property holds a reference, all its type sources accept this type because they accept the current value. */
-						if ((prop_info->flags & (ZEND_ACC_READONLY|ZEND_ACC_PPP_SET_MASK))
-						 || prop_info->hooks
-						 || ZEND_TYPE_IS_COMPLEX(prop_info->type)
+						if (ZEND_TYPE_IS_COMPLEX(prop_info->type)
 						 || (type_mask & ~(MAY_BE_NULL|MAY_BE_BOOL|MAY_BE_LONG|MAY_BE_DOUBLE|MAY_BE_STRING))
 						 /* single type, this excludes bool too as a reference can exist to true or false standalone types. */
 						 || (type_mask & (type_mask - 1))

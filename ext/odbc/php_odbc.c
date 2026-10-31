@@ -960,7 +960,9 @@ PHP_FUNCTION(odbc_prepare)
 													&result->param_info[i].scale, &result->param_info[i].nullable);
 		if (rc == SQL_ERROR) {
 			odbc_sql_error(result->conn_ptr, result->stmt, "SQLDescribeParameter");
-			odbc_result_free(result);
+			if (result->conn_ptr) {
+				odbc_result_free(result);
+			}
 			zval_ptr_dtor(return_value);
 			RETURN_FALSE;
 		}

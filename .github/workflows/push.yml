@@ -91,6 +91,7 @@ jobs:
         run: sudo make install
       - name: Test
         env:
+          SKIP_ASAN: ${{ matrix.asan && '1' || '' }}
           ASAN_OPTIONS: "detect_leaks=1:abort_on_error=1:allocator_may_return_null=1"
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: |
@@ -101,6 +102,9 @@ jobs:
             ext/standard/tests/strings/gh23204_frameless.phpt \
             ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
             ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
+            ext/opcache/tests/jit/assign_obj_may_throw_hooks_static_lazy.phpt \
+            ext/opcache/tests/jit/gh24436.phpt \
+            ext/standard/tests/network/network_addr_nul_and_bindto_leak.phpt \
             ext/session/tests/gh24376_session_cloexec.phpt; do
             if [ -f "$t" ]; then
               TESTS="$TESTS $t"
@@ -109,12 +113,15 @@ jobs:
           sapi/cli/php run-tests.php -P -q --show-diff $TESTS
       - name: Test Tracing JIT
         env:
+          SKIP_ASAN: ${{ matrix.asan && '1' || '' }}
           ASAN_OPTIONS: "detect_leaks=1:abort_on_error=1:allocator_may_return_null=1"
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: |
           TESTS=""
           for t in \
             ext/standard/tests/strings/gh23204_frameless.phpt \
+            ext/opcache/tests/jit/assign_obj_may_throw_hooks_static_lazy.phpt \
+            ext/opcache/tests/jit/gh24436.phpt \
             ext/standard/tests/strings/metaphone_lookahead_overflow.phpt; do
             if [ -f "$t" ]; then
               TESTS="$TESTS $t"
@@ -185,6 +192,9 @@ jobs:
             ext/zlib/tests/zlib_filter_inflate_error_handler_removes_filter.phpt \
             ext/standard/tests/strings/metaphone_lookahead_overflow.phpt \
             ext/session/tests/gh24376_session_cloexec.phpt \
+            ext/opcache/tests/jit/assign_obj_may_throw_hooks_static_lazy.phpt \
+            ext/opcache/tests/jit/gh24436.phpt \
+            ext/standard/tests/network/network_addr_nul_and_bindto_leak.phpt \
             ext/opcache/tests/jit/aarch64_ir_patch_and_veneer_safety.phpt; do
             if [ -f "$t" ]; then
               TESTS="$TESTS $t"

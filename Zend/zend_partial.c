@@ -1008,7 +1008,7 @@ static zend_op_array *zp_compile(zval *this_ptr, zend_function *function,
 		const char *tmp = getenv("DUMP_PFA_AST");
 		if (tmp && ZEND_ATOL(tmp)) {
 			zend_string *str = zend_ast_export("", closure_ast, "");
-			fprintf(stderr, "PFA AST: %pS\n", str);
+			fprintf(stderr, "PFA AST: %.*s\n", (int)ZSTR_LEN(str), ZSTR_VAL(str));
 			zend_string_release(str);
 		}
 	}

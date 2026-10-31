@@ -5369,7 +5369,7 @@ ZEND_API zend_result zend_get_default_from_internal_arg_info(
 	}
 
 #if 0
-	fprintf(stderr, "Evaluating %pS via AST\n", default_value);
+	fprintf(stderr, "Evaluating %.*s via AST\n", (int)ZSTR_LEN(default_value), ZSTR_VAL(default_value));
 #endif
 	return get_default_via_ast(default_value_zval, ZSTR_VAL(default_value));
 }
